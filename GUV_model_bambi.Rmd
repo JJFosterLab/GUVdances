@@ -176,13 +176,34 @@ cd_uv = subset(cd, ID %in% uv_ids)
 # Load Bambi model and extract draws for each parameter
 
 ```{r Load the model}
+# Define Parameter Groupings
+global_params = c(
+  "Intercept", "B", "C", "B:C", 
+  "kappa_Intercept", "kappa_B", "kappa_C", "kappa_B:C",
+  "1|Individual_kappa", "B|Individual_kappa", "C|Individual_kappa", "B:C|Individual_kappa",
+  "kappa_1|Individual_sigma", "kappa_B|Individual_sigma", 
+  "kappa_C|Individual_sigma", "kappa_B:C|Individual_sigma",
+  "kappa_1|Individual_offset", "kappa_B|Individual_offset", 
+  "kappa_C|Individual_offset", "kappa_B:C|Individual_offset"
+)
+
+ind_params = c(
+  "1|Individual", "B|Individual", "C|Individual", "B:C|Individual",
+  "kappa_1|Individual", "kappa_B|Individual", "kappa_C|Individual", "kappa_B:C|Individual"
+)
+
 #Import arviz for model handling
 az = reticulate::import("arviz")
 # Load the NetCDF file
 idata = az$from_netcdf("2Results/GUV_unwrap_model.nc")
-# Convert to data frame
+# Convert to data frame #TOO LARGE
+# posterior_df = reticulate::py_to_r(x =                                         
+#                                      idata$posterior$to_dataframe()
+                                   # )
 posterior_df = reticulate::py_to_r(x =                                         
-                                     idata$posterior$to_dataframe()
+                                     idata$posterior[
+                                       c(global_params, ind_params)
+                                       ]$to_dataframe()
                                    )
 ```
 
@@ -212,21 +233,7 @@ posterior_df = within(posterior_df,
                                     each = obs_per_chain * n_ind)
                       }
 )
-# Define Parameter Groupings
-global_params = c(
-  "Intercept", "B", "C", "B:C", 
-  "kappa_Intercept", "kappa_B", "kappa_C", "kappa_B:C",
-  "1|Individual_kappa", "B|Individual_kappa", "C|Individual_kappa", "B:C|Individual_kappa",
-  "kappa_1|Individual_sigma", "kappa_B|Individual_sigma", 
-  "kappa_C|Individual_sigma", "kappa_B:C|Individual_sigma",
-  "kappa_1|Individual_offset", "kappa_B|Individual_offset", 
-  "kappa_C|Individual_offset", "kappa_B:C|Individual_offset"
-)
 
-ind_params = c(
-  "1|Individual", "B|Individual", "C|Individual", "B:C|Individual",
-  "kappa_1|Individual", "kappa_B|Individual", "kappa_C|Individual", "kappa_B:C|Individual"
-)
 
 ```
 
