@@ -11,6 +11,7 @@ output:
 editor_options: 
   markdown: 
     wrap: sentence
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
@@ -50,18 +51,17 @@ Celestial orientation in bees: the use of spectral cues.
 Sayin S, Couzin-Fuchs E, Petelski I, Günzel Y, Salahshour M, Lee CY, Graving JM, Li L, Deussen O, Sword GA, et al. (2025) The behavioral mechanisms governing collective motion in swarming locusts.
 *Science* 387(6737):995–791
 
-Capretto, T., Piho, C., Kumar, R., Westfall, J., Yarkoni, T., & Martin, O. (2022)
-`Bambi`: A simple interface for fitting Bayesian linear models in Python.
-*Journal of Statistical Software* 103(15), 1-29. doi:10.18637/jss.v103.i15
+Capretto, T., Piho, C., Kumar, R., Westfall, J., Yarkoni, T., & Martin, O.
+(2022) `Bambi`: A simple interface for fitting Bayesian linear models in Python.
+*Journal of Statistical Software* 103(15), 1-29.
+<doi:10.18637/jss.v103.i15>
 
 # Motivation
-
 
 # Set up workspace
 
 To extract these models, we need to load the appropriate functions.
-Make sure that the `circular`, `reticulate`, `posterior` and `bayesplot`,  are installed, and 
-(on Windows) that you have installed the latest version of [Rtools](https://cran.r-project.org/bin/windows/Rtools/).
+Make sure that the `circular`, `reticulate`, `posterior` and `bayesplot`, are installed, and (on Windows) that you have installed the latest version of [Rtools](https://cran.r-project.org/bin/windows/Rtools/).
 Here we first set up a `reticulate` Python environment with the appropriate versions of each package, then reload reticulate to ensure that those packages are available.
 
 ```{r Load functions and packages}
@@ -136,6 +136,7 @@ cd = within(cd,
 u_id = with(cd, unique(ID)) # unique beedances
 length(u_id)#169 beedances
 ```
+
 ```{r Shorten variable names}
 cd = within(cd,
             {
@@ -148,6 +149,7 @@ cd = within(cd,
 ```
 
 ## Identify dances for both conditions
+
 Identify dances in which all four stimulus conditions were used.
 
 ```{r both conditions}
@@ -192,6 +194,7 @@ ind_params = c(
   "kappa_1|Individual", "kappa_B|Individual", "kappa_C|Individual", "kappa_B:C|Individual"
 )
 
+
 #Import arviz for model handling
 az = reticulate::import("arviz")
 # Load the NetCDF file
@@ -200,10 +203,16 @@ idata = az$from_netcdf("2Results/GUV_unwrap_model.nc")
 # posterior_df = reticulate::py_to_r(x =                                         
 #                                      idata$posterior$to_dataframe()
                                    # )
+#params to extract
+all_params = c(global_params,
+               ind_params)[#include only ones found at object top level
+  c(global_params, ind_params) %in% 
+     names(idata$posterior)  ] 
+#convert to python list
+py_var_list = reticulate::r_to_py(as.list(all_params))
+#extract to data frame
 posterior_df = reticulate::py_to_r(x =                                         
-                                     idata$posterior[
-                                       c(global_params, ind_params)
-                                       ]$to_dataframe()
+                                     idata$posterior[py_var_list]$to_dataframe()
                                    )
 ```
 
@@ -267,12 +276,10 @@ for(param in ind_params)
 draws_final = posterior::as_draws_df(draws_wide)
 ```
 
-
 # Inspect model estimates
 
-This model identifies both a population level bias (near 0°) and individual biases
- with stable parameter estimates on the 'unwrapped' (circular modulo) scale.
- 
+This model identifies both a population level bias (near 0°) and individual biases with stable parameter estimates on the 'unwrapped' (circular modulo) scale.
+
 ```{r Inspect unimodal change model}
 
 mcmc_trace(draws_final,
@@ -290,12 +297,7 @@ mcmc_trace(draws_final,
                          '|Individual_sigma') )
 ```
 
-
-
-
-
-Calculating the $\hat{R}$ values for unwrapped estimates for $\mu_i$ reveals that 
-all estimates converged well ($\hat{R}<1.01$).
+Calculating the $\hat{R}$ values for unwrapped estimates for $\mu_i$ reveals that all estimates converged well ($\hat{R}<1.01$).
 
 ```{r summarise fixef with arviz}
 azsum_fixed = az$summary(idata,
@@ -551,9 +553,7 @@ for(i in u_id_nr)
 
 ```
 
-
 ## Plot population level predictions
-
 
 ```{r Calculate estimates of means and changes}
 
@@ -976,7 +976,7 @@ for(i in which(u_id %in% di_ids)) {
 Draws2Cont(draws = draws_final,
            x_string = 'sin(C + `B:C`) * A1(softplus(`B:C|Individual_kappa`))',
            y_string = 'cos(C + `B:C`) * A1(softplus(`B:C|Individual_kappa`))')
-
+print("Effect of UV on direction for dim stimuli")
 with(draws_final,
      {
        round(deg(
@@ -995,8 +995,7 @@ with(draws_final,
      length = 0.1/1.25,
      col = adjustcolor('gray25', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
 )
-
-print("Effect of UV on direction for dim stimuli")
+print("Effect of UV dim interaction")
 with(draws_final,
      {
        round(deg(
@@ -1076,7 +1075,7 @@ axis(2, at = 0:5*5)
 
 ```
 
-``` {r Kappa effects}
+```{r Kappa effects}
 # Plot difference in kappa
 par(mfrow = c(1,4))
 
@@ -1246,49 +1245,51 @@ with(draws_final,
 #plot kappa
 par(mfrow = c(1,4))
 
+# lticks = c(t((0:20*10)%*%t(c(1,1,1)))) + c(1,3,5)
+lticks = c(1,3,5, 1:20*10)
 with(draws_final,
-     VertHist(data = softplus(`1|Individual_kappa`), 
+     VertHist(data = log10(  softplus(`1|Individual_kappa`)), 
               main = '\ngreen bright',
               ylab = 'kappamu',
-              ylim = c(0, 15),
+              ylim = log10(c(0, 100)+1),
               col = adjustcolor('green3', alpha.f = 100/255),
               axes = FALSE,
               cex.axis = 0.7))
 axis(1)
-axis(2, at = 0:5*5)
+axis(2, at = log10(lticks), labels = lticks)
 
 with(draws_final,
-     VertHist(data = softplus(`C|Individual_kappa`), 
+     VertHist(data = log10( softplus(`C|Individual_kappa`)), 
               main = '\nUV effect',
               ylab = 'kappamu',
-              ylim = c(0, 50),
+              ylim = log10(c(0, 100)+1),
               col = adjustcolor('gray50', alpha.f = 100/255),
               axes = FALSE,
               cex.axis = 0.7))
 axis(1)
-axis(2, at = 0:5*10)
+axis(2, at = log10(lticks), labels = lticks)
 
 with(draws_final,
-     VertHist(data = softplus(`B|Individual_kappa`), 
+     VertHist(data = log10( softplus(`B|Individual_kappa`)), 
               main = '\ndim effect',
               ylab = 'kappamu',
-              ylim = c(0, 50),
+              ylim = log10(c(0, 100)+1),
               col = adjustcolor('darkgreen', alpha.f = 100/255),
               axes = FALSE,
               cex.axis = 0.7))
 axis(1)
-axis(2, at = 0:5*10)
+axis(2, at = log10(lticks), labels = lticks)
 
 with(draws_final,
-     VertHist(data = softplus(`B:C|Individual_kappa`), 
+     VertHist(data = log10( softplus(`B:C|Individual_kappa`)), 
               main = '\ndim uv effect',
               ylab = 'kappamu',
-              ylim = c(0, 50),
+              ylim = log10(c(0, 100)+1),
               col = adjustcolor('purple', alpha.f = 100/255),
               axes = FALSE,
               cex.axis = 0.7))
 axis(1)
-axis(2, at = 0:5*10)
+axis(2, at = log10(lticks), labels = lticks)
 ```
 
 ```{r Kappamu conditions}
@@ -1350,6 +1351,7 @@ VertHist(data = post_kappamu_ul,
          axes = FALSE, cex.axis = 0.7)
 axis(1); axis(2, at = 0:5)
 ```
+
 ```{r kappamu condition differences}
 # 1. Calculate Differences
 diff_uv_bright <- post_kappamu_uh - post_kappamu_gh
@@ -1375,6 +1377,18 @@ VertHist(data = diff_green_dim,
 axis(1); axis(2, at = -2:2); abline(h = 0, lty = 2)
 
 # Plot 3: Effect of Dimming UV
+
+print("Effect of dimming on concentration across individuals")
+round(
+        quantile(diff_green_dim, probs = c(0.5, 0.025, 0.975)),
+        digits = 3
+      )
+print("Effect of dimming on mean vector length across individuals")
+round(
+        quantile(A1(post_kappamu_gl) - A1(post_kappamu_gh), probs = c(0.5, 0.025, 0.975)),
+        digits = 3
+      )
+ 
 VertHist(data = diff_uv_dim, 
          main = '\nDiff: dim UV', ylab = 'diff kappamu',
          ylim = c(-2, 2), col = adjustcolor('purple', alpha.f = 100/255),
@@ -1389,9 +1403,7 @@ VertHist(data = diff_interaction,
 axis(1); axis(2, at = -2:2); abline(h = 0, lty = 2)
 ```
 
-
 # Appendix
-
 
 ## Plot individual means
 
@@ -1492,6 +1504,7 @@ for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
   print(plt)
 }
 ```
+
 ```{r Inspect individual kappas for UV effect}
 plt_panels = 9
 for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
@@ -1507,6 +1520,7 @@ for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
   print(plt)
 }
 ```
+
 ```{r Inspect individual kappas for dim effect}
 plt_panels = 9
 for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
@@ -1522,6 +1536,7 @@ for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
   print(plt)
 }
 ```
+
 ```{r Inspect individual kappas for UV dim effect}
 plt_panels = 9
 for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
@@ -1539,8 +1554,9 @@ for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
 ```
 
 ## Session Information
+
 <details>
+
 <summary>Click to expand session metadata</summary>
 
-```{r session-info, echo=FALSE}
-sessionInfo()
+\`\`\`{r session-info, echo=FALSE} sessionInfo()
