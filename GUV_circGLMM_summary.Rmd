@@ -427,8 +427,8 @@ for(i in seq_along(u_id_num)) {
       gl_mu_vec = Intercept + m_i + B + m_bi
       gl_ka_vec = kappa_Intercept + k_i + kappa_B + k_bi
       
-      ul_mu_vec = Intercept + m_i + B + C + B:C + m_bi + m_ci + m_bci
-      ul_ka_vec = kappa_Intercept + k_i + kappa_B + kappa_C + kappa_B:C + k_bi + k_ci + k_bci
+      ul_mu_vec = Intercept + m_i + B + C + `B:C` + m_bi + m_ci + m_bci
+      ul_ka_vec = kappa_Intercept + k_i + kappa_B + kappa_C + `kappa_B:C` + k_bi + k_ci + k_bci
     }
   )
   
