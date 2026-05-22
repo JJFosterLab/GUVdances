@@ -1,0 +1,1729 @@
+---
+title: "Circular GLMM Summary"
+author: "James Foster"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+    toc: true
+    fig_caption: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Details
+
+**DESCRIPTION**
+
+Load and plot circular GLMMs to describe all four stimulus conditions.
+
+**INPUTS**
+
+`GUV_functions.R`
+
+**OUTPUTS**
+
+Plotted estimates.
+
+**REFERENCES**
+
+**Experimental approach**
+
+- Edrich W, Neumeyer C & von Helversen, O.
+  (1979) “Anti-sun orientation” of bees with regard to a field of ultraviolet light.
+  *J. Comp. Physiol.* 134, 151–157.
+
+- Rossel, S.
+  & Wehner, R.
+  (1984).
+  Celestial orientation in bees: the use of spectral cues.
+  *J. Comp. Physiol. A* 155, 605–613.
+
+**modelling methods**
+
+- Sayin S, ...
+  Graving JM, $\textit{et~al}$.(2025) The behavioral mechanisms governing collective motion in swarming locusts.
+  $\textit{Science}$ 387,995-1000 [DOI:[10.1126/science.adq7832](DOI:%5B10.1126/science.adq7832){.uri}](https://doi.org/10.1126/science.adq7832)
+
+- Graving JM, Sayin S, Costelloe BR, Goldshtein A & Foster JJ. Unwrapping circular statistics with Bayesian multilevel models.
+
+- Abril-Pla, O., Andreani, V., Carroll, C., Dong, L., Fonnesbeck, C. J., Kochurov, M., Kumar, R., Lao, J., Luhmann, C. C., Martin, O. A., et al. (2023).
+  `PyMC`: a modern, and comprehensive probabilistic programming framework in Python.
+  *PeerJ Computer Science* 9, e1516.
+
+- Capretto, T., Piho, C., Kumar, R., Westfall, J., Yarkoni, T., & Martin, O.
+
+  (2022) `Bambi`: A simple interface for fitting Bayesian linear models in Python. *Journal of Statistical Software* 103(15), 1-29. <doi:10.18637/jss.v103.i15>
+
+- Seyboldt, A., Carlson, E. L., & Carpenter, B.
+  (2026).
+  Preconditioning Hamiltonian Monte Carlo by minimizing Fisher Divergence.
+  *arXiv* preprint arXiv:2603.18845.
+
+# Motivation
+
+# Set up workspace
+
+To extract these models, we need to load the appropriate functions.
+Make sure that the `circular`, `reticulate`, `posterior` and `bayesplot`, are installed, and (on Windows) that you have installed the latest version of [Rtools](https://cran.r-project.org/bin/windows/Rtools/).
+Here we first set up a `reticulate` Python environment with the appropriate versions of each package, then load reticulate to ensure that those packages are available.
+
+```{r Load functions and packages}
+source('GUV_functions.R')
+p311=reticulate::install_python(version = '3.11')
+reticulate::virtualenv_create(
+  envname = "GUV-env",
+  python = p311)
+reticulate::py_install(
+  envname = "GUV-env",
+  packages = 
+            c("numpy==1.26.4",
+               "pandas==2.1.4",
+               "scipy==1.11.4",
+               "arviz==0.17.1",
+              "h5py==3.11.0")
+            )
+require(reticulate) #run python from R
+use_virtualenv("GUV-env",
+               required = TRUE)
+reticulate::py_config()
+#load .feather files (readable in R and Python)
+require(arrow)
+require(feather)
+#process and plot MCMC data
+require(posterior)
+require(bayesplot)
+options(posterior.num_args = list(sigfig = 3))#for ease of reading
+```
+
+# Prepare data
+
+Then load the data that will be used.
+This is our dance data, reorganised by `GUV_organisedata.R` as `colour_dance_reorg.csv`.
+
+```{r Load data}
+#Dance angle data
+cd = read.table(file = '1Data/colour_dance_reorg.csv', 
+                header = T, 
+                sep  = ',')
+head(cd)
+```
+
+## Format data
+
+Ensure that each variable has the correct data format for subsequent analysis.
+
+```{r Data formatting}
+cd = within(cd,
+            {
+              ID = as.factor(ID) # beedance identifier as a factor
+              date = as.factor(date) # date as a factor
+              signed_angle = Mod360.180(bearing)  # bearing between -180 and 180
+              angle = circular(rad(signed_angle),# bearing between -pi and pi
+                               rotation = 'clock') # circular format suppresses later warnings
+            }
+)
+u_id = with(cd, unique(ID)) # unique beedances
+length(u_id)#169 beedances
+```
+
+```{r Shorten variable names}
+cd = within(cd,
+            {
+              BR = brightn
+              CL = colour
+              DT = date
+              RN = run
+            }
+)
+```
+
+# Load Bambi model and extract draws for each parameter
+
+This loads draws from our fitted Bayesian model's posterior distribution.
+Because the initial model was built and saved in `Python`, we use the `reticulate` package to interface directly with `Python` libraries from within our `R` environment.
+
+**Parameter Structural Hierarchies**
+
+To keep our subsequent analyses organized, the model parameters are explicitly categorised into two functional groups based on their structural hierarchy: Population-Level (Global) Parameters (`global_params`) and Individual-Level (Random) Effects (`ind_params`).
+
+Attempting to convert the entire unconstrained posterior object directly into an R data frame (`idata$posterior$to_dataframe()`) can result in session crashes or severe performance bottlenecks due to the sheer volume of nested individual dimensions, so we circumvent this by subsetting only our desired variables prior to parsing the data frame.
+
+```{r Load the model}
+# Define Parameter Groupings
+global_params = c(
+  "Intercept", "B", "C", "B:C", 
+  "kappa_Intercept", "kappa_B", "kappa_C", "kappa_B:C",
+  "1|Individual_kappa", "B|Individual_kappa", "C|Individual_kappa", "B:C|Individual_kappa",
+  "kappa_1|Individual_sigma", "kappa_B|Individual_sigma", 
+  "kappa_C|Individual_sigma", "kappa_B:C|Individual_sigma",
+  "kappa_1|Individual_offset", "kappa_B|Individual_offset", 
+  "kappa_C|Individual_offset", "kappa_B:C|Individual_offset"
+)
+
+ind_params = c(
+  "1|Individual", "B|Individual", "C|Individual", "B:C|Individual",
+  "kappa_1|Individual", "kappa_B|Individual", "kappa_C|Individual", "kappa_B:C|Individual"
+)
+
+
+#Import arviz for model handling
+az = reticulate::import("arviz")
+# Load the NetCDF file
+idata = az$from_netcdf("2Results/GUV_unwrap_model.nc")
+# Convert to data frame 
+#params to extract
+all_params = c(global_params,
+               ind_params)[#include only ones found at object top level
+  c(global_params, ind_params) %in% 
+     names(idata$posterior)  ] 
+#convert to python list
+py_var_list = reticulate::r_to_py(as.list(all_params))
+#extract to data frame
+posterior_df = reticulate::py_to_r(x =                                         
+                                     idata$posterior[py_var_list]$to_dataframe()
+                                   )
+```
+
+## Set up metadata about draws for sorting.
+
+Because flattening the multidimensional model structure strips away explicit indexing, this section reconstructs that metadata.
+Using the explicit nesting structure of the dataset ($169$ individuals evaluated across $4$ parallel Markov chains), we calculate the total observations per chain.
+We then apply structured replication sequences (`rep`) to reconstruct the original MCMC framework directly within our data frame.
+
+- `Individual_ID`: Cycles rapidly through each unique subject row-by-row.
+
+- `.iteration`: Modulates sequentially, tracking the chronological progression of MCMC sampler draws.
+
+- `.chain`: Blocks the data into distinct tracking groups to preserve the integrity of each independent sampling history.
+
+```{r Identify individuals and chains}
+# Initial Metadata -----------------------------------------------------
+
+n_ind = 169
+n_chains = 4
+obs_per_chain = nrow(posterior_df) /
+                    (n_ind * n_chains) # Calculated automatically
+
+# Individual changes every row (1,2...169, 1,2...169)
+posterior_df = within(posterior_df,
+                      {
+                Individual_ID = rep(x = 1:n_ind, 
+                         times = n_chains * obs_per_chain)
+    
+    # Iteration changes every 169 rows (1,1... (169 times), 2,2... (169 times))
+                .iteration    = rep(x = rep(x = 1:obs_per_chain, 
+                                 each = n_ind), 
+                         times = n_chains)
+
+# Chain changes every (169 * obs_per_chain) rows
+                .chain        = rep(x = 1:n_chains, 
+                                    each = obs_per_chain * n_ind)
+                      }
+)
+```
+
+## Reshaping Posterior Draws into Wide Format
+
+This step restructures the long-format data frame into a wide format, tracking the separate sampling pathways of each individual subject across every MCMC iteration.
+
+ - **Reshaping Pipeline** **Data Splitting**: The data frame is split into individual subsets using `Individual_ID`.
+The baseline global parameters and tracking metadata from the first individual are used to establish a template for the wide data frame (`draws_wide`).
+
+- **Dynamic Pivoting**: A nested loop extracts each individual-level random effect, replaces special syntax characters (\| to \_) for column safety, and systematically pivots the values out into explicit individual columns (`[Parameter]Ind[i]`).
+
+- **Posterior Class Conversion**: The structured wide data frame is converted into a specialized `draws_df` object using the `posterior` package.
+This standardises the layout, preparing the data for prediction extraction.
+
+```{r Reorganise draws by individual}
+
+# Reshape posterior draws -------------------------------------------------
+
+# Reshape to Wide Format
+list_of_inds = split(x = posterior_df, 
+                     f = posterior_df$Individual_ID)
+
+# Start wide df with metadata and population-level parameters
+existing_globals = intersect(x = global_params,
+                             y = colnames(posterior_df))
+# take the first individual's data as a template for the wide data frame
+draws_wide  =  list_of_inds[[1]][, c(".chain", ".iteration", existing_globals)]
+
+# Pivot individual-level parameters into columns
+for(param in ind_params)
+  {
+  if(param %in% colnames(posterior_df))
+    {
+    clean_base = gsub(pattern = "\\|",
+                      replacement =  "_",
+                      x =  param)
+    for(i in 1:n_ind) {
+      draws_wide[[paste0(clean_base, "_Ind_", i)]] = list_of_inds[[i]][[param]]
+    }
+  }
+}
+
+# Export to draws dataframe
+draws_final = posterior::as_draws_df(draws_wide)
+```
+
+# Inspect model estimates
+
+This model identifies both a population level bias (near 0°) and individual biases with stable parameter estimates on the 'unwrapped' (circular modulo) scale.
+
+```{r Inspect main effects}
+
+mcmc_trace(draws_final,
+           pars = c('Intercept', 'B', 'C', 'B:C'),
+           transformations = unwrap_circular_deg)
+mcmc_trace(draws_final,
+           pars = paste0("kappa_",
+                         c('Intercept', 'B', 'C', 'B:C')) )
+mcmc_trace(draws_final,
+           pars = paste0( c('1', 'B', 'C', 'B:C'),
+                          '|Individual_kappa') )
+mcmc_trace(draws_final,
+           pars = paste0('kappa_',
+                         c('1', 'B', 'C', 'B:C'),
+                         '|Individual_sigma') )
+```
+
+Calculating the $\hat{R}$ values for unwrapped estimates for $\mu_i$ reveals that all estimates converged well ($\hat{R}<1.01$).
+
+```{r summarise fixef with arviz}
+azsum_fixed = az$summary(idata,
+           var_names=c("Intercept", #slightly right shifted, should converge to around 0.26
+               "B", 
+                "C",
+                "B:C",
+                "kappa_Intercept",
+               "kappa_B",
+                "kappa_C",
+                "kappa_B:C"
+                ),
+    circ_var_names=c("Intercept",
+                    "B",
+                    "C",
+                    "B:C"
+                    )
+)
+print(azsum_fixed[, c(1, 3, 4, 7, 9)], digits = 3)
+```
+
+```{r summarise ranef with arviz}
+azsum_ranef = az$summary(idata,
+           var_names=c( "1|Individual_kappa",
+        "B|Individual_kappa",
+        "C|Individual_kappa",
+        "B:C|Individual_kappa",
+        "kappa_1|Individual_sigma",
+        "kappa_B|Individual_sigma",
+        "kappa_C|Individual_sigma",
+        "kappa_B:C|Individual_sigma"
+                )
+)
+print(azsum_ranef[, c(1, 3, 4, 7, 9)], digits = 3)
+```
+
+# Extract predictions
+
+To look at the model estimates in context and compare the predictions with the data, we need to extract and summarise the draws.
+The posterior can be summarised by its quantiles: `quantile(x, probs = c(0.025, 0975)` identifies the high-density interval (HDI) containing $95\%$ of draws for `x`.
+
+On a circular scale the bounds between which quantiles should be counted are not clearly defined, but `mod_circular` ensures data fall between $-180°$ and $180°$, and `quantile.circular` chooses sensible bounds.
+
+```{r set up functions to summarise draws}
+
+#A function to find the circular median in (-pi, pi)
+MedCDraws = function(x,
+                     templ = 'none', #assumes radians
+                     medn = 1) #take the 1st median
+{
+  median.circular( circular(x = mod_circular(x),
+                            template = templ)
+                                           )[medn]
+}
+QCDraws = function(x,
+                   probs = c(0.025, 0.5, 0.975),
+                     templ = 'none',
+                     medn = 1)
+{
+  quantile.circular( circular(x = mod_circular(x),
+                            template = templ),
+                     probs = probs
+                                           )
+}
+```
+
+To align individual numbers from the model with individual names in the `data.frame` we need to load this column from the `pandas` version of the data.
+This data is saved in a `.feather` file (readable in both `R` and `Python`).
+
+```{r Load the data in pandas format}
+cd_pd = read_feather(path = "1Data/colour_dance_reorg.feather",
+                     columns = c('Individual'))
+#find individuals
+cd = within(cd,
+            {Individual_nr = cd_pd$Individual}
+            )
+#This follows the same order as u_id
+u_id_nr = with(cd, unique(Individual_nr))
+```
+
+## Extracting Individual-Specific Predictions for Each Condition
+
+This section isolates individual-level parameters to compute the posterior predictions for all four experimental conditions.
+
+**Processing Workflow**
+
+- **Dynamic Variable Fetching**: A loop iterates through each unique individual identifier, using dynamic string construction (`get()`) to fetch that specific individual's random intercept and treatment effect draws from the wide data frame.
+
+- **Linear Combination Reconstruction**: The script recombines the population-level baseline effects with the individual-level deviations to reconstruct the specific direction ($\mu$) and constency ($\kappa$) for each condition.
+
+- **Nested Storage Architecture**: The raw vectors are assigned to a master nested list (`individual_draws`) to preserve the entire distribution profile for downstream circular analysis.
+Concurrently, point-estimate summaries (medians) are calculated and stored in isolated vectors.
+
+```{r Extract individual predictions}
+# Setup containers for summary statistics
+u_id_num = 1:n_ind
+mu_id_gh = kappa_id_gh = numeric(length(u_id_num))
+mu_id_uh = kappa_id_uh = numeric(length(u_id_num))
+mu_id_gl = kappa_id_gl = numeric(length(u_id_num))
+mu_id_ul = kappa_id_ul = numeric(length(u_id_num))
+
+# Create one Master List for all raw draws
+# Structure: individual_draws[[i]]$mu$gh
+individual_draws = vector("list", length(u_id_num))
+
+for(i in seq_along(u_id_num)) {
+  
+  calc = within(
+    draws_final, 
+    {
+      # Dynamic fetch
+      m_i   = get(paste0("1_Individual_Ind_", i))
+      m_bi  = get(paste0("B_Individual_Ind_", i))
+      m_ci  = get(paste0("C_Individual_Ind_", i))
+      m_bci = get(paste0("B:C_Individual_Ind_", i))
+      
+      k_i   = get(paste0("kappa_1_Individual_Ind_", i))
+      k_bi  = get(paste0("kappa_B_Individual_Ind_", i))
+      k_ci  = get(paste0("kappa_C_Individual_Ind_", i))
+      k_bci = get(paste0("kappa_B:C_Individual_Ind_", i))
+      
+      # Calculate Raw Vectors
+      gh_mu_vec = Intercept + m_i
+      gh_ka_vec = kappa_Intercept + k_i
+      
+      uh_mu_vec = Intercept + m_i + C + m_ci
+      uh_ka_vec = kappa_Intercept + k_i + kappa_C + k_ci
+      
+      gl_mu_vec = Intercept + m_i + B + m_bi
+      gl_ka_vec = kappa_Intercept + k_i + kappa_B + k_bi
+      
+      ul_mu_vec = Intercept + m_i + B + C + B:C + m_bi + m_ci + m_bci
+      ul_ka_vec = kappa_Intercept + k_i + kappa_B + kappa_C + kappa_B:C + k_bi + k_ci + k_bci
+    }
+  )
+  
+  # Save to the Nested List
+  individual_draws[[i]] = list(
+    mu    = list(gh = calc$gh_mu_vec, 
+                 uh = calc$uh_mu_vec, 
+                 gl = calc$gl_mu_vec, 
+                 ul = calc$ul_mu_vec),
+    kappa = list(gh = calc$gh_ka_vec, 
+                 uh = calc$uh_ka_vec, 
+                 gl = calc$gl_ka_vec, 
+                 ul = calc$ul_ka_vec)
+  )
+  
+  # Store summary stats for quick table access
+  mu_id_gh[i] = MedCDraws(calc$gh_mu_vec)
+  kappa_id_gh[i] = median(calc$gh_ka_vec)
+  
+  mu_id_uh[i] = MedCDraws(calc$uh_mu_vec)
+  kappa_id_uh[i] = median(calc$uh_ka_vec)
+  
+  mu_id_gl[i] = MedCDraws(calc$gl_mu_vec)
+  kappa_id_gl[i] = median(calc$gl_ka_vec)
+  
+  mu_id_ul[i] = MedCDraws(calc$ul_mu_vec)
+  kappa_id_ul[i] = median(calc$ul_ka_vec)
+}
+```
+
+### Visualising Individual Predictions
+
+This section loops through individual dances to plot observed waggle$~$runs against the model's posterior predictions for each condition.
+The raw circular data are displayed alongside density contours derived from the joint posterior distribution of $\mu$ and $\kappa$.
+Finally, the overall model-estimated mean$~$vector are superimposed as an arrow using `arrows.circular`.
+
+```{r Plot the individual predictions}
+
+par(pty = 's')
+par(mar = c(0,0,0,0),
+    mfrow = c(4,4) )
+for(i in u_id_nr)
+# for(i in 20+1:50 )
+{
+  indiv = u_id[u_id_nr %in% i]
+  # Construct the exact column names
+  mu_i   = paste0("1_Individual_Ind_", i)
+  mu_bi  = paste0("B_Individual_Ind_", i)
+  mu_ci  = paste0("C_Individual_Ind_", i)
+  mu_bci = paste0("B:C_Individual_Ind_", i)
+  
+  ka_i   = paste0("kappa_1_Individual_Ind_", i)
+  ka_bi  = paste0("kappa_B_Individual_Ind_", i)
+  ka_ci  = paste0("kappa_C_Individual_Ind_", i)
+  ka_bci = paste0("kappa_B:C_Individual_Ind_", i)
+  
+  #green high
+  with(subset(cd, 
+              ID %in% indiv &
+                CL %in% 'g' & BR %in% 'h'),
+  {
+    PCfun(angles = bearing,
+         col = 'green3',
+         plot_rho = FALSE,
+         title = indiv)
+    }
+  )
+  Draws2Cont(individual_draws[[i]],
+           x_string = paste0('sin(mu$gh) * A1(softplus(kappa$gh))'),
+           y_string = paste0('cos(mu$gh) * A1(softplus(kappa$gh))')
+  )
+  
+  arrows.circular(
+    x = circular(mu_id_gh[i],
+                 units = 'radians',
+                 rotation = 'clock',
+                 zero = pi/2),
+    y = A1(softplus(kappa_id_gh[i])), # Ensure softplus is applied here
+    lwd = 5,
+    length = 0.1/1.25,
+    col = adjustcolor('green3', alpha.f = 0.8)
+  )
+
+  #UV high
+  with(subset(cd,
+              ID %in% indiv &
+                CL %in% 'u' & BR %in% 'h'),
+  {
+    PCfun(angles = bearing,
+         col = 'magenta3',
+         plot_rho = FALSE,
+         title = indiv)
+    }
+  )
+   Draws2Cont(individual_draws[[i]],
+           x_string = paste0('sin(mu$uh) * A1(softplus(kappa$uh))'),
+           y_string = paste0('cos(mu$uh) * A1(softplus(kappa$uh))')
+  )
+  arrows.circular(x = circular(x = mu_id_uh[i],
+                               units = 'radians',
+                              rotation = 'clock',
+                              zero = pi/2),
+                 y = A1(softplus(kappa_id_uh[i])),
+                 lwd = 5,
+                 length = 0.1/1.25,
+                 col = adjustcolor('magenta3', alpha.f = 200/255))
+
+  #green low
+  with(subset(cd,
+              ID %in% indiv &
+                CL %in% 'g' & BR %in% 'l'),
+  {
+    PCfun(angles = bearing,
+         col = 'green4',
+         plot_rho = FALSE,
+         title = indiv)
+    }
+  )
+   Draws2Cont(individual_draws[[i]],
+           x_string = paste0('sin(mu$gl) * A1(softplus(kappa$gl))'),
+           y_string = paste0('cos(mu$gl) * A1(softplus(kappa$gl))')
+  )
+  arrows.circular(x = circular(x = mu_id_gl[i],
+                               units = 'radians',
+                              rotation = 'clock',
+                              zero = pi/2),
+                 y = A1(softplus(kappa_id_gl[i])),
+                 lwd = 5,
+                 length = 0.1/1.25,
+                 col = adjustcolor('green4', alpha.f = 200/255))
+  # 
+  #UV low
+  with(subset(cd,
+              ID %in% indiv &
+                CL %in% 'u' & BR %in% 'l'),
+  {
+    PCfun(angles = bearing,
+         col = 'purple',
+         plot_rho = FALSE,
+         title = indiv)
+    }
+  )
+  Draws2Cont(individual_draws[[i]],
+           x_string = paste0('sin(mu$ul) * A1(softplus(kappa$ul))'),
+           y_string = paste0('cos(mu$ul) * A1(softplus(kappa$ul))')
+  )
+  arrows.circular(x = circular(x = mu_id_ul[i],
+                               units = 'radians',
+                              rotation = 'clock',
+                              zero = pi/2),
+                 y = A1(softplus(kappa_id_ul[i])),
+                 lwd = 5,
+                 length = 0.1/1.25,
+                 col = adjustcolor('purple', alpha.f = 200/255))
+}
+
+```
+
+## Plot population level predictions
+
+### Calculating Empirical Descriptors and Paired Shifts
+
+This section calculates descriptive circular metrics from the raw data and filters individuals into paired cohorts to track behavioral changes across treatments.
+
+**Analysis Pipeline**
+
+- **Circular Summary Extraction**: Computes mean vector lengths (`rho.circular`), maximum likelihood parameters (`MLE_est`), and Rayleigh uniformity tests (`Rayleigh_p`) using `aggregate`.
+These are saved to `mean_vectors`, alongside a linearised precision metric (`inv_softplus`).
+
+- **Cohort Filtering**: Groups individual dances via `sapply` into paired treatment subsets to unbalanced conditions.
+
+Dances in `full_ids` included all four conditions.
+
+`gr_ids` & `uv_ids` included light intensity shifts (Bright vs Dim) within one stimulus colour.
+
+`br_ids` & `di_ids` included colour shifts (Green vs UV) within one intensity.
+
+- **Empirical Delta Processing**: Calculates descriptive shifts in individual headings ($\Delta\mu$) across transitions using `MuDiff`.
+
+```{r Calculate estimates of means and changes}
+
+#calculate mean vectors
+mean_vectors = aggregate(angle~ID*brightn*colour,#+sun_az+sun_el_rad, # N.B. Including sun azimuth drops some cases without a time stamp
+                         data = cd,
+                         FUN = rho.circular
+)
+#correct names
+mean_vectors = within(mean_vectors,
+                      {mean_vector = angle; rm(angle)} # angle now indicates a mean vector, not an angle
+)
+#add kappa
+mle_estimates = aggregate(angle~ID*brightn*colour,#+sun_az+sun_el,
+                          data = cd,
+                          FUN = MLE_est
+)
+#Rayleigh tests
+rayleigh_tests = aggregate(angle~ID*brightn*colour,#+sun_az+sun_el,
+                          data = cd,
+                          FUN = Rayleigh_p
+                          )
+#add to the summary table and 
+#calculate inverse softplus kappa
+mean_vectors = within(mean_vectors,
+                      {
+                        mu = deg(mle_estimates$angle[,'mu'])
+                        kappa = mle_estimates$angle[,'kappa']
+                        iskappa  = inv_softplus(kappa)
+                      }
+)
+
+luc = sapply(u_id,
+              FUN = IndCond,
+              dt = cd)
+
+#Most individuals that made it to bright green 
+full_ids = u_id[luc == 4]
+
+#find pair conditions
+#green
+grc = sapply(u_id,
+              FUN = function(id, dt)
+                {
+                with(subset(dt,
+                            ID %in% id & 
+                              colour %in% 'g'),
+                     {
+                       length(unique(brightn))
+                       }
+                     )
+              },
+              dt = cd)
+#bright
+brc = sapply(u_id,
+              FUN = function(id, dt)
+                {
+                with(subset(dt,
+                            ID %in% id & 
+                              brightn %in% 'h'),
+                     {
+                       length(unique(colour))
+                       }
+                     )
+              },
+              dt = cd)
+#UV
+uvc = sapply(u_id,
+              FUN = function(id, dt)
+                {
+                with(subset(dt,
+                            ID %in% id & 
+                              colour %in% 'u'),
+                     {
+                       length(unique(brightn))
+                       }
+                     )
+              },
+              dt = cd)
+#dim
+dic = sapply(u_id,
+              FUN = function(id, dt)
+                {
+                with(subset(dt,
+                            ID %in% id & 
+                              brightn %in% 'l'),
+                     {
+                       length(unique(colour))
+                       }
+                     )
+              },
+              dt = cd)
+
+#There should be two brightness levels for green
+gr_ids = u_id[grc == 2]
+#There should be two colour levels for bright
+br_ids = u_id[brc == 2]
+#There should be two brightness levels for UV
+uv_ids = u_id[uvc == 2]
+#There should be two colour levels for dim
+di_ids = u_id[dic == 2]
+
+#condition specific
+gh_ids = with(subset(cd,
+                     subset = CL %in% 'g' & 
+                       BR %in% 'h'),
+              unique(ID)
+              )
+uh_ids = with(subset(cd,
+                     subset = CL %in% 'u' & 
+                       BR %in% 'h'),
+              unique(ID)
+              )
+gl_ids = with(subset(cd,
+                     subset = CL %in% 'g' & 
+                       BR %in% 'l'),
+              unique(ID)
+              )
+ul_ids = with(subset(cd,
+                     subset = CL %in% 'u' & 
+                       BR %in% 'l'),
+              unique(ID)
+              )
+
+
+mu_diff_gl = sapply(X = gr_ids,
+                    FUN = MuDiff,
+                    dt = mean_vectors,
+                    cl = 'g',
+                    br = 'l')
+mu_diff_uh = sapply(X = br_ids,
+                    FUN = MuDiff,
+                    dt = mean_vectors,
+                    cl = 'u',
+                    br = 'h')
+mu_diff_ul = sapply(X = uv_ids,
+                    FUN = MuDiff,
+                    dt = mean_vectors,
+                    cl = 'u',
+                    br = 'l')
+mu_diff_ugl = sapply(X = di_ids,
+                    FUN = MuDiff,
+                    dt = mean_vectors,
+                     cl = 'u',
+                    br = 'l',
+                    ref_cl = 'g',
+                    ref_br = 'h')
+
+```
+
+### Visualising Population-Level Circular Predictions
+
+This section generates side-by-side population-level visualisations for the four conditions on a $2 \times 2$ grid layout.
+It combines empirical mean dance directions, individual estimates, and global model predictions.
+
+**Visualisation Components**
+
+- **Empirical Baselines**: Plots individual mean directions (`mu`) from the data using `PCfun`.
+
+- **Individual Estimates**: Thin background arrows (`arrows.circular`) showing the median estimated mean\~vector.
+
+- **Posterior Uncertainty Contours**: Uses `Draws2Cont` to summarise the model's posterior distribution density (where estimates were most frequent) for each condition.
+
+- **Global Model Estimates**: Thick foreground arrow representing the population's median estimated mean$~$vector.
+
+```{r Plot population level predictions}
+par(pty = 's')
+# Population mean for green bright (Baseline: Intercept)
+par(mfrow = c(2,2), mar = c(0,0,0,0))
+
+with(subset(mean_vectors, colour %in% 'g' & brightn %in% 'h'), {
+  PCfun(angles = mu, col = 'green3', shrink = 2, plot_rho = FALSE)
+})
+
+for(i in which(u_id %in% gh_ids)) {
+  arrows.circular(x = circular(x = mu_id_gh[i], units = 'radians', rotation = 'clock', zero = pi/2),
+                  y = A1(softplus(kappa_id_gh[i])), lwd = 0.25, length = 0,
+                  col = adjustcolor('green3', alpha.f = 200/255))
+}
+
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(Intercept) * A1(softplus(kappa_Intercept))',
+           y_string = 'cos(Intercept) * A1(softplus(kappa_Intercept))')
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(Intercept), 
+                                  units = 'radians', 
+                                  rotation = 'clock', zero = pi/2),
+                     y = A1(median(softplus(kappa_Intercept))),
+                     lwd = 5, length = 0.1/1.25,
+                     col = adjustcolor('green3', alpha.f = 200/255, offset = c(rep(-0.2,3),0) )
+     )
+)
+
+
+# pop mean for UV bright (Intercept + C)
+with(subset(mean_vectors, colour %in% 'u' & brightn %in% 'h'), {
+  PCfun(angles = mu, col = 'magenta3', shrink = 2, plot_rho = FALSE)
+})
+
+for(i in which(u_id %in% uh_ids) )
+{
+
+  arrows.circular(x = circular(x = mu_id_uh[i],
+                               units = 'radians',
+                              rotation = 'clock',
+                              zero = pi/2),
+                 y = A1(softplus(kappa_id_uh[i])),
+                 lwd = 0.25,
+                 length = 0,
+                 col = adjustcolor('magenta3', alpha.f = 200/255))
+}
+
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(Intercept + C) * A1(softplus(kappa_Intercept + kappa_C))',
+           y_string = 'cos(Intercept + C) * A1(softplus(kappa_Intercept + kappa_C))')
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(Intercept + C), units = 'radians', rotation = 'clock', zero = pi/2),
+                     y = A1(median(softplus(kappa_Intercept + kappa_C))),
+                     lwd = 5, length = 0.1/1.25, col = adjustcolor('magenta3', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
+)
+
+# pop mean for green dim (Intercept + B)
+with(subset(mean_vectors, colour %in% 'g' & brightn %in% 'l'), {
+  PCfun(angles = mu, col = 'darkgreen', shrink = 2, plot_rho = FALSE)
+})
+
+
+for(i in which(u_id %in% gl_ids) )
+{
+
+  arrows.circular(x = circular(x = mu_id_gl[i],
+                               units = 'radians',
+                              rotation = 'clock',
+                              zero = pi/2),
+                 y = A1(softplus(kappa_id_gl[i])),
+                 lwd = 0.25,
+                 length = 0,
+                 col = adjustcolor('darkgreen', alpha.f = 200/255 ))
+}
+
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(Intercept + B) * A1(softplus(kappa_Intercept + kappa_B))',
+           y_string = 'cos(Intercept + B) * A1(softplus(kappa_Intercept + kappa_B))')
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(Intercept + B), units = 'radians', rotation = 'clock', zero = pi/2),
+                     y = A1(median(softplus(kappa_Intercept + kappa_B))),
+                     lwd = 5, length = 0.1/1.25, col = adjustcolor('darkgreen', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
+)
+
+# pop mean for UV dim (Intercept + B + C + BC)
+with(subset(mean_vectors, colour %in% 'u' & brightn %in% 'l'), {
+  PCfun(angles = mu, col = 'purple', shrink = 2, plot_rho = FALSE)
+})
+
+
+for(i in which(u_id %in% ul_ids) )
+{
+
+  arrows.circular(x = circular(x = mu_id_ul[i],
+                               units = 'radians',
+                              rotation = 'clock',
+                              zero = pi/2),
+                 y = A1(softplus(kappa_id_ul[i])),
+                 lwd = 0.25,
+                 length = 0,
+                 col = adjustcolor('purple', alpha.f = 200/255)
+  )
+}
+
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(Intercept + B + C + `B:C`) * A1(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`))',
+           y_string = 'cos(Intercept + B + C + `B:C`) * A1(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`))')
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(Intercept + B + C + `B:C`), units = 'radians', rotation = 'clock', zero = pi/2),
+                     y = A1(median(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`))),
+                     lwd = 5, length = 0.1/1.25, col = adjustcolor('purple', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
+)
+```
+
+### Plotting Relative Population-Level Effects
+
+This section visualises the differences between conditions on a $2 \times 2$ grid and prints summary quantiles for the directional shifts.
+
+**Visualisation Components**
+
+- **Empirical Differences**: Plots the observed differences in mean dance angle using `PCfun`.
+
+- **Individual Vectors**: median estimates for each individual dance.
+
+- **Posterior Densities**: Projects posterior distribution contours for the main effects ($B$ and $C$) and their interaction ($B:C$) using `Draws2Cont`.
+
+- **Population Shifts**: Overlays a thick arrow representing the estimated median population-level shift.
+
+- **Turn Size Quantiles**: Computes and prints the median and $95\%$ credible intervals for directional adjustments and individual turning magnitudes.
+
+```{r Plot relative pop level effects}
+par(pty = 's')
+# Population mean for green bright (Baseline: Intercept)
+par(mfrow = c(2,2), mar = c(0,0,0,0))
+
+# --- Effect of UV ---
+PCfun(angles = unlist(mu_diff_uh),
+      col = 'gray40',
+      shrink = 2,
+      plot_rho = FALSE)
+
+for(i in which(u_id %in% uv_ids)) {
+  # UV high
+  arrows.circular(x = circular(x = mu_id_uh[i] - mu_id_gh[i],
+                               units = 'radians',
+                               rotation = 'clock',
+                               zero = pi/2),
+                  y = A1(softplus(kappa_id_uh[i])),
+                  lwd = 0.5,
+                  length = 0,
+                  col = adjustcolor('gray60', alpha.f = 200/255))
+}
+#scale by alignment _across_ individuals
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(C) * A1(softplus(`C|Individual_kappa`))',
+           y_string = 'cos(C) * A1(softplus(`C|Individual_kappa`))')
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(C),
+                                  units = 'radians',
+                                  rotation = 'clock',
+                                  zero = pi/2),
+     y = A1(median(softplus(`C|Individual_kappa`))),
+     lwd = 5,
+     length = 0.1/1.25,
+     col = adjustcolor('gray40', alpha.f = 200/255, offset = c(rep(-0.2,3),0))
+     )
+)
+print("Effect of UV bright on direction")
+with(draws_final,
+     {
+       round(deg(
+         quantile(mod_circular(C), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+
+# --- Effect of dim green ---
+PCfun(angles = unlist(mu_diff_gl),
+      col = 'darkgreen',
+      shrink = 2,
+      plot_rho = FALSE)
+
+# green low
+for(i in which(u_id %in% gr_ids)) {
+  arrows.circular(x = circular(x = mu_id_gl[i] - mu_id_gh[i],
+                               units = 'radians',
+                               rotation = 'clock',
+                               zero = pi/2),
+                  y = A1(softplus(kappa_id_gl[i])),
+                  lwd = 0.25,
+                  length = 0,
+                  col = adjustcolor('green4', alpha.f = 200/255))
+}
+
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(B) * A1(softplus(`B|Individual_kappa`))',
+           y_string = 'cos(B) * A1(softplus(`B|Individual_kappa`))')
+
+print("Effect of Green dim on direction")
+with(draws_final,
+     {
+       round(deg(
+         quantile(mod_circular(B), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(B),
+                                  units = 'radians',
+                                  rotation = 'clock',
+                                  zero = pi/2),
+     y = A1(median(softplus(`B|Individual_kappa`))),
+     lwd = 5,
+     length = 0.1/1.25,
+     col = adjustcolor('darkgreen', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
+)
+
+# --- Effect of dim UV ---
+PCfun(angles = unlist(mu_diff_ul),
+      col = 'purple',
+      shrink = 2,
+      plot_rho = FALSE)
+
+# UV low
+for(i in which(u_id %in% uv_ids)) {
+  arrows.circular(x = circular(x = mu_id_ul[i] - mu_id_uh[i],
+                               units = 'radians',
+                               rotation = 'clock',
+                               zero = pi/2),
+                  y = A1(softplus(kappa_id_ul[i])),
+                  lwd = 0.25,
+                  length = 0,
+                  col = adjustcolor('purple', alpha.f = 200/255))
+}
+
+# The difference between UV bright and UV dim is brightness and the interaction
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(B + `B:C`) * A1(softplus(`B:C|Individual_kappa`))',
+           y_string = 'cos(B + `B:C`) * A1(softplus(`B:C|Individual_kappa`))')
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(B + `B:C`),
+                                  units = 'radians',
+                                  rotation = 'clock',
+                                  zero = pi/2),
+     y = A1(median(softplus(`B:C|Individual_kappa`))),
+     lwd = 5,
+     length = 0.1/1.25,
+     col = adjustcolor('purple', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
+)
+
+print("Effect of UV dim on direction")
+with(draws_final,
+     {
+       round(deg(
+         quantile(mod_circular(B + `B:C`), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+
+# --- Effect of dim UV relative to dim green ---
+PCfun(angles = unlist(mu_diff_ugl),
+      col = 'gray25',
+      shrink = 2,
+      plot_rho = FALSE)
+
+# UV low
+for(i in which(u_id %in% di_ids)) {
+  arrows.circular(x = circular(x = mu_id_ul[i] - mu_id_gl[i],
+                               units = 'radians',
+                               rotation = 'clock',
+                               zero = pi/2),
+                  y = A1(softplus(kappa_id_ul[i])),
+                  lwd = 0.25,
+                  length = 0,
+                  col = adjustcolor('gray25', alpha.f = 200/255))
+}
+
+# The difference between green dim and UV dim is colour and the interaction
+Draws2Cont(draws = draws_final,
+           x_string = 'sin(C + `B:C`) * A1(softplus(`B:C|Individual_kappa`))',
+           y_string = 'cos(C + `B:C`) * A1(softplus(`B:C|Individual_kappa`))')
+print("Effect of UV on direction for dim stimuli")
+with(draws_final,
+     {
+       round(deg(
+         quantile(mod_circular(C + `B:C`), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+
+with(draws_final,
+     arrows.circular(x = circular(x = MedCDraws(C + `B:C`),
+                                  units = 'radians',
+                                  rotation = 'clock',
+                                  zero = pi/2),
+     y = A1(median(softplus(`B:C|Individual_kappa`))),
+     lwd = 5,
+     length = 0.1/1.25,
+     col = adjustcolor('gray25', alpha.f = 200/255, offset = c(rep(-0.2,3),0)))
+)
+print("Effect of UV dim interaction")
+with(draws_final,
+     {
+       round(deg(
+         quantile(mod_circular(`B:C`), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+
+print("Effect of dim UV on individual turn size")
+with(draws_final,
+     {
+       round(deg(
+         quantile(abs(mod_circular(mu_id_ul - mu_id_uh)), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+
+print("Effect of UV on  on individual turn size for dim stimuli")
+with(draws_final,
+     {
+       round(deg(
+         quantile(abs(mod_circular(mu_id_ul - mu_id_gl)), probs = c(0.5, 0.025, 0.975))
+       ))
+     }
+)
+```
+
+
+### Visualising Consistency Predictions
+
+This section visualises the posterior distributions for concentration parameters ($\kappa$) and prints summary quantiles for concentration and estimated mean vector lengths (`A_1(kappa)`).
+
+**Visualisation & Summary Components**
+
+- **Consistency ($\kappa$)**: Plots a $1 \times 4$ grid of vertical histograms (`VertHist`) showing the posterior density of estimated concentration parameters across all four treatment groups.
+
+- **Quantile Reporting**: Computes median estimates and $95\%$ credible intervals (or HDI) for each condition.
+
+```{r Kappa predictions}
+#plot kappa
+par(mfrow = c(1,4))
+
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept), 
+              main = '\ngreen bright',
+              ylab = 'kappa',
+              ylim = c(0, 15),
+              col = adjustcolor('green3', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = 0:5*5)
+
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept + kappa_C), 
+              main = '\nUV bright',
+              ylab = 'kappa',
+              ylim = c(0, 15),
+              col = adjustcolor('magenta3', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = 0:5*5)
+
+
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept + kappa_B), 
+              main = '\ngreen dim',
+              ylab = 'kappa',
+              ylim = c(0, 15),
+              col = adjustcolor('green4', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = 0:5*5)
+
+
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept + kappa_B  + kappa_C +  + `kappa_B:C`), 
+              main = '\nUV dim',
+              ylab = 'kappa',
+              ylim = c(0, 15),
+              col = adjustcolor('purple', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = 0:5*5)
+
+```
+
+### Changes in consistency
+
+- **Contrast Effects ($\Delta\kappa$)**: Generates a second $1 \times 4$ grid comparing pairwise changes in concentration across light conditions, identifying shift in consistency with a dashed baseline marker (`abline`).
+
+```{r Kappa effects}
+# Plot difference in kappa
+par(mfrow = c(1,4))
+
+# Effect of UV Brightness (UV Bright - Green Bright)
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept + kappa_C) - softplus(kappa_Intercept), 
+              main = '\nDiff: UV bright',
+              ylab = 'diff kappa',
+              ylim = c(-10, 10),
+              col = adjustcolor('magenta3', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = -2:2*5)
+abline(h = 0, lty = 2)
+
+# Effect of Dimming Green (Green Dim - Green Bright)
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept + kappa_B) - softplus(kappa_Intercept), 
+              main = '\nDiff: green dim',
+              ylab = 'diff kappa',
+              ylim = c(-10, 10),
+              col = adjustcolor('green4', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = -2:2*5)
+abline(h = 0, lty = 2)
+
+# Effect of Dimming UV (UV Dim - UV Bright)
+with(draws_final,
+     VertHist(data = softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`) - 
+                     softplus(kappa_Intercept + kappa_C), 
+              main = '\nDiff: dim UV',
+              ylab = 'diff kappa',
+              ylim = c(-10, 10),
+              col = adjustcolor('purple', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = -2:2*5)
+abline(h = 0, lty = 2)
+
+# Interaction Effect (Green Dim - UV Dim)
+with(draws_final,
+     VertHist(data = softplus(kappa_B + `kappa_B:C`) - softplus(kappa_B), 
+              main = '\nDim UV vs dim green',
+              ylab = 'diff kappa',
+              ylim = c(-10, 10),
+              col = adjustcolor('gray40', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = -2:2*5)
+abline(h = 0, lty = 2)
+
+#Report effects
+# Colour effect
+#effect on kappa
+print("effect of UV bright on kappa")
+with(draws_final,
+     {
+       round(
+     quantile(softplus(kappa_Intercept + kappa_C) - 
+                softplus(kappa_Intercept),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 2
+       )
+     }
+)
+#effect on mean vector
+print("effect of UV bright on mean vector length")
+with(draws_final,
+     {
+       round(
+     quantile(A1(softplus(kappa_Intercept + kappa_C)) - 
+                A1(softplus(kappa_Intercept)),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 3
+       )
+     }
+)
+
+# Brightness effect
+#effect on kappa
+print("effect of green dim on kappa")
+with(draws_final,
+     {
+       round(
+     quantile(softplus(kappa_Intercept + kappa_B) - 
+                softplus(kappa_Intercept),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 2
+       )
+     }
+)
+#effect on mean vector
+print("effect of green dim on mean vector length")
+with(draws_final,
+     {
+       round(
+     quantile(A1(softplus(kappa_Intercept + kappa_B)) - 
+                A1(softplus(kappa_Intercept)),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 3
+       )
+     }
+)
+
+# UV dim effect
+#effect on kappa
+print("effect of UV dim on kappa")
+with(draws_final,
+     {
+       round(
+     quantile(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`) - 
+                softplus(kappa_Intercept),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 2
+       )
+     }
+)
+
+#effect on mean vector
+print("effect of UV dim on mean vector length")
+with(draws_final,
+     {
+       round(
+     quantile(A1(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`)) - 
+                A1(softplus(kappa_Intercept)),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 3
+       )
+     }
+)
+
+# UV effect on dim stimuli
+#effect on kappa
+print("dim stimuli effect of UV on kappa")
+with(draws_final,
+     {
+       round(
+     quantile(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`) - 
+                softplus(kappa_Intercept + kappa_B),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 2
+       )
+     }
+)
+
+#effect on mean vector
+print("dim stimuli effect of UV on mean vector length")
+with(draws_final,
+     {
+       round(
+     quantile(A1(softplus(kappa_Intercept + kappa_B + kappa_C + `kappa_B:C`)) - 
+                A1(softplus(kappa_Intercept + kappa_B)),
+              probs = c(0.5, 0.025, 0.975)),
+     digits = 3
+       )
+     }
+)
+
+```
+
+### Visualising the Concentration Across Individuals for Condition Effects
+
+To interpret how similarly individuals responded to each condition, we extract the posterior distributions for the individual-effects concentration ($\kappa_\mu$).
+Because this was estimated on the inverse softplus scale, the raw MCMC draws are transformed using the softplus function $\text{softplus}(x) = \log(1 + e^x)$.
+
+**Analysis Workflow**
+
+- **Scale Transformation**: Since some effects were extremely consistent across individuals ($\kappa_{\mu} \to \infty$), they are plotted on a $\log_{10}$ scale.
+
+- **Custom Axis Mapping**: To maintain intuitive interpretation, custom logarithmic axis ticks (lticks) are generated, overlaying the original linear values as text labels onto the mathematically transformed plotting area.
+
+- **Contrast Profiles**: We isolate and plot four key elements of the model structure.
+"Green Bright" (`1|Individual_kappa`) is the baseline population concentration, the "UV Effect" (`C|Individual_kappa`) is the shift in direction driven by switching from green to UV, the "Dim Effect" (`B|Individual_kappa`) is the shift in direction due to switching from bright to dim, and the "Interaction Effect" (`B:C|Individual_kappa`) is the additional shift in direction when the stimulus is both dim and UV, beyond that already accounted for by the additive effects of UV and dimming.
+
+```{r Kappamu effects}
+#plot kappa
+par(mfrow = c(1,4))
+
+lticks = c(1,3,5, 1:20*10)
+
+#"Green Bright" (Intercept)
+with(draws_final,
+     VertHist(data = log10(  softplus(`1|Individual_kappa`)), 
+              main = '\ngreen bright',
+              ylab = 'kappamu',
+              ylim = log10(c(0, 100)+1),
+              col = adjustcolor('green3', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = log10(lticks), labels = lticks)
+
+#UV Effect
+with(draws_final,
+     VertHist(data = log10( softplus(`C|Individual_kappa`)), 
+              main = '\nUV effect',
+              ylab = 'kappamu',
+              ylim = log10(c(0, 100)+1),
+              col = adjustcolor('gray50', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = log10(lticks), labels = lticks)
+
+#Dim Effect
+with(draws_final,
+     VertHist(data = log10( softplus(`B|Individual_kappa`)), 
+              main = '\ndim effect',
+              ylab = 'kappamu',
+              ylim = log10(c(0, 100)+1),
+              col = adjustcolor('darkgreen', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = log10(lticks), labels = lticks)
+
+#Interaction Effect (UV dim)
+with(draws_final,
+     VertHist(data = log10( softplus(`B:C|Individual_kappa`)), 
+              main = '\ndim uv effect',
+              ylab = 'kappamu',
+              ylim = log10(c(0, 100)+1),
+              col = adjustcolor('purple', alpha.f = 100/255),
+              axes = FALSE,
+              cex.axis = 0.7))
+axis(1)
+axis(2, at = log10(lticks), labels = lticks)
+```
+
+### Estimate the Posterior Distribution of Concentration Across Individuals
+
+To evaluate the consistency of individual directional preferences within each conditions, we estimate the population's concentration parameter, $\kappa_{\mu}$, using a von\~Mises distribution.This process converts our nested list of individual MCMC draws into localised data structures to estimate model parameters across our four experimental conditions:Green Bright (`gh`), UV Bright (`uh`), Green Dim (`gl`), UV Dim (`ul`).
+
+**Analysis Workflow**
+
+- **Data Restructuring**: We first transform the raw list structures into explicit $Draw \times Individual$ matrices.
+
+- **Maximum Likelihood Estimation (MLE)**: Because the model only explicitly estimated across-individual concentration for *condition differences*, we need to across-individual concentration *within* each condition needs to be estimated from the model's posterior draws.
+For each MCMC draw (row), we compute the Maximum Likelihood Estimate for $\kappa$ using `mle.vonmises`.
+
+- **Posterior Profiling**: By applying this MLE estimation across every sequential draw row, we reconstruct the full posterior distribution profile for $\kappa_{\mu}$ under each condition.The code chunk below performs these transformations and visualises the resulting posterior distributions using side-by-side vertical histograms for direct comparison.
+
+```{r Kappamu conditions}
+
+# ==========================================
+# MATRIX RECONSTRUCTION & HELPER FUNCTIONS
+# ==========================================
+
+# Determine dimensions from the nested individual_draws list structure
+# Rows will represent MCMC draws, Columns will represent unique individuals
+n_draws = length(individual_draws[[1]]$mu$gh)
+n_ind   = length(individual_draws)
+
+# Helper function to extract a specific experimental condition across all individuals
+# Loops through each individual and builds a Draw-by-Individual matrix
+get_mu_matrix = function(
+  cond
+) {
+  # sapply combines the resulting vectors into columns of a single matrix
+  sapply(1:n_ind, function(i) individual_draws[[i]]$mu[[cond]])
+}
+
+# Extract and reconstruct matrices for each of the four experimental conditions
+mu_mat_gh = get_mu_matrix("gh") # Green High (Bright)
+mu_mat_uh = get_mu_matrix("uh") # UV High (Bright)
+mu_mat_gl = get_mu_matrix("gl") # Green Low (Dim)
+mu_mat_ul = get_mu_matrix("ul") # UV Low (Dim)
+
+
+# ==========================================
+# MAXIMUM LIKELIHOOD ESTIMATION (MLE)
+# ==========================================
+
+# Function to calculate the MLE kappa (concentration parameter) for a single draw row
+# Converts the linear numeric values into a circular object before fitting
+calc_kappa_mle = function(
+  mu_row
+) {
+  # mle.vonmises returns a complex list object; we extract only the numeric $kappa estimate
+  as.numeric(mle.vonmises(circular(mu_row, units='radians'))$kappa)
+}
+
+
+# ==========================================
+# POSTERIOR ESTIMATION VIA APPLY
+# ==========================================
+
+# Apply the MLE function across all rows (MARGIN = 1) of each matrix
+# This yields the posterior distribution of kappamu for each experimental condition
+post_kappamu_gh = apply(mu_mat_gh, 1, calc_kappa_mle)
+post_kappamu_uh = apply(mu_mat_uh, 1, calc_kappa_mle)
+post_kappamu_gl = apply(mu_mat_gl, 1, calc_kappa_mle)
+post_kappamu_ul = apply(mu_mat_ul, 1, calc_kappa_mle)
+
+
+# ==========================================
+# VISUALIZATION (VERTICAL HISTOGRAMS)
+# ==========================================
+
+# Set up a 1x4 plotting grid to display all conditions side-by-side
+par(mfrow = c(1,4))
+
+# --- Plot 1: Green Bright ---
+VertHist(data = post_kappamu_gh, 
+         main = '\ngreen bright', ylab = 'kappamu (MLE)',
+         ylim = c(0, 5), col = adjustcolor('green3', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1)
+axis(2, at = 0:5)
+
+# --- Plot 2: UV Bright ---
+VertHist(data = post_kappamu_uh, 
+         main = '\nUV bright', ylab = 'kappamu (MLE)',
+         ylim = c(0, 5), col = adjustcolor('magenta3', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1)
+axis(2, at = 0:5)
+
+# --- Plot 3: Green Dim ---
+VertHist(data = post_kappamu_gl, 
+         main = '\ngreen dim', ylab = 'kappamu (MLE)',
+         ylim = c(0, 5), col = adjustcolor('green4', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1)
+axis(2, at = 0:5)
+
+# --- Plot 4: UV Dim ---
+VertHist(data = post_kappamu_ul, 
+         main = '\nUV dim', ylab = 'kappamu (MLE)',
+         ylim = c(0, 5), col = adjustcolor('purple', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1)
+axis(2, at = 0:5)
+```
+
+```{r kappamu condition differences}
+# 1. Calculate Differences
+diff_uv_bright <- post_kappamu_uh - post_kappamu_gh
+diff_green_dim <- post_kappamu_gl - post_kappamu_gh
+diff_uv_dim    <- post_kappamu_ul - post_kappamu_uh
+diff_interaction <- diff_uv_dim - diff_green_dim
+
+# 2. Plotting
+par(mfrow = c(1,4))
+
+# Plot 1: Effect of UV Brightness
+VertHist(data = diff_uv_bright, 
+         main = '\nDiff: UV bright', ylab = 'diff kappamu',
+         ylim = c(-2, 2), col = adjustcolor('magenta3', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1); axis(2, at = -2:2); abline(h = 0, lty = 2)
+
+# Plot 2: Effect of Dimming Green
+VertHist(data = diff_green_dim, 
+         main = '\nDiff: green dim', ylab = 'diff kappamu',
+         ylim = c(-2, 2), col = adjustcolor('green4', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1); axis(2, at = -2:2); abline(h = 0, lty = 2)
+
+# Plot 3: Effect of Dimming UV
+
+print("Effect of dimming on concentration across individuals")
+round(
+        quantile(diff_green_dim, probs = c(0.5, 0.025, 0.975)),
+        digits = 3
+      )
+print("Effect of dimming on mean vector length across individuals")
+round(
+        quantile(A1(post_kappamu_gl) - A1(post_kappamu_gh), probs = c(0.5, 0.025, 0.975)),
+        digits = 3
+      )
+ 
+VertHist(data = diff_uv_dim, 
+         main = '\nDiff: dim UV', ylab = 'diff kappamu',
+         ylim = c(-2, 2), col = adjustcolor('purple', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1); axis(2, at = -2:2); abline(h = 0, lty = 2)
+
+# Plot 4: Interaction Effect
+VertHist(data = diff_interaction, 
+         main = '\nDim UV vs dim green', ylab = 'diff kappamu',
+         ylim = c(-2, 2), col = adjustcolor('gray40', alpha.f = 100/255),
+         axes = FALSE, cex.axis = 0.7)
+axis(1); axis(2, at = -2:2); abline(h = 0, lty = 2)
+```
+
+# Appendix
+
+## Plot individual means
+
+Print all individual effects in this model.
+
+### Mean angle
+
+```{r Inspect individual means for green high}
+plt_panels = 9
+#individual but they overlap when unwrapped
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+plt = mcmc_trace(draws_final,
+           pars = paste0("1_Individual_Ind_",
+                         start_idx:end_idx),
+           facet_args = list(ncol = 3,
+                             nrow = 3),
+           transformations = unwrap_circular_deg
+           )
+print(plt)
+}
+```
+
+```{r Inspect individual UV effects}
+plt_panels = 9
+#individual but they overlap when unwrapped
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+plt = mcmc_trace(draws_final,
+           pars = paste0("C_Individual_Ind_",
+                         start_idx:end_idx),
+           facet_args = list(ncol = 3,
+                             nrow = 3),
+           transformations = unwrap_circular_deg
+           )
+print(plt)
+}
+```
+
+```{r Inspect individual dim effects}
+plt_panels = 9
+#individual but they overlap when unwrapped
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+plt = mcmc_trace(draws_final,
+           pars = paste0("B_Individual_Ind_",
+                         start_idx:end_idx),
+           facet_args = list(ncol = 3,
+                             nrow = 3),
+           transformations = unwrap_circular_deg
+           )
+print(plt)
+}
+```
+
+```{r Inspect individual UV dim effects}
+plt_panels = 9
+#individual but they overlap when unwrapped
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+plt = mcmc_trace(draws_final,
+           pars = paste0("B:C_Individual_Ind_",
+                         start_idx:end_idx),
+           facet_args = list(ncol = 3,
+                             nrow = 3),
+           transformations = unwrap_circular_deg
+           )
+print(plt)
+}
+```
+
+### Concentration
+
+```{r Inspect individual kappas for green high}
+plt_panels = 9
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+  
+  plt = mcmc_trace(draws_final,
+             pars = paste0("kappa_1_Individual_Ind_", start_idx:end_idx), # Check exact model prefix
+             facet_args = list(ncol = 3, nrow = 3)
+             )
+  print(plt)
+}
+```
+
+```{r Inspect individual kappas for UV effect}
+plt_panels = 9
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+  
+  plt = mcmc_trace(draws_final,
+             pars = paste0("kappa_C_Individual_Ind_", start_idx:end_idx), # Check exact model prefix
+             facet_args = list(ncol = 3, nrow = 3)
+             )
+  print(plt)
+}
+```
+
+```{r Inspect individual kappas for dim effect}
+plt_panels = 9
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+  
+  plt = mcmc_trace(draws_final,
+             pars = paste0("kappa_B_Individual_Ind_", start_idx:end_idx), # Check exact model prefix
+             facet_args = list(ncol = 3, nrow = 3)
+             )
+  print(plt)
+}
+```
+
+```{r Inspect individual kappas for UV dim effect}
+plt_panels = 9
+for(id in 0:(ceiling(length(u_id)/plt_panels)-1))
+{
+  # Calculate the specific range of indices for this page
+  start_idx = (id * plt_panels) + 1
+  end_idx   = min((id + 1) * plt_panels, length(u_id))
+  
+  plt = mcmc_trace(draws_final,
+             pars = paste0("kappa_B:C_Individual_Ind_", start_idx:end_idx), # Check exact model prefix
+             facet_args = list(ncol = 3, nrow = 3)
+             )
+  print(plt)
+}
+```
+
+## Session Information
+
+<details>
+
+<summary>Click to expand session metadata</summary>
+
+```{r session-info, echo=FALSE}
+
+sessionInfo()
+
+```
