@@ -1,6 +1,9 @@
-# Green-UV dances
+# High intensity overrides spectral cues in dancing honeybees
+This repository contains files relevant to the manuscript "_High intensity overrides spectral cues in dancing honeybees_"
+by James J. Foster, 	Jacob M. Graving and Keram Pfeiffer.
 A project analysing the dances of honeybees
 presented with green and UV light spots of different brightnesses. 
+Raw waggle-run angles can be found in `colourdances.csv`. 
 Data organisation and exploratory analysis performed in `R`, using the scripts 
 `GUV_organisedata.R` and `GUV_analysis_summary.Rmd` and functions from `GUV_functions.R`.
 Circular GLMMs fitted using methods from [unwrap](https://github.com/jgraving/unwrap) 
