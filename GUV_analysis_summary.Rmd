@@ -17,7 +17,7 @@ editor_options:
 
 > **DESCRIPTION**
 >
-> Loads the reorganised data from `colour_dance_reorg.csv`, saved from `GUV_organisedata.R`, and generates plots to show the how dances changed as a function of light stimulus.
+> Loads the reorganised data from `1Data/colour_dance_reorg.csv`, saved from `GUV_organisedata.R`, and generates plots to show the how dances changed as a function of light stimulus.
 
 > **INPUTS**
 >
@@ -25,11 +25,12 @@ editor_options:
 
 > **OUTPUTS**
 >
-> Plotted results.
+> `2Results/phototaxis_modlist.RData`,
+> `2Results/MLE_paired_diffs.csv`,
+> `2Results/MLEdetails_paired_diffs.RData`,
+> `2Results/LRT_paired_diffs.csv`,
+> `2Results/BF_paired_diffs.csv`,
 
-> **CHANGES**
->
-> -   
 
 > **REFERENCES**
 >
@@ -45,9 +46,6 @@ editor_options:
 > Celestial orientation in bees: the use of spectral cues.
 > *J. Comp. Physiol. A* 155, 605–613.
 
-> **TODO**
->
-> -   Print to HMTL
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -401,12 +399,14 @@ print(cn_mv_full_art)
 The post-hoc tests indicate a large difference between bright and dim conditions, as expected, but very little evidence for differences between colours.
 The interactions (for which there was low support in the overall model) reflect the pattern we expect, that all bright conditions have higher accuracy than all dim conditions, and that while the two dim conditions have similar accuracy, the bright UV bright condition may be slightly more accurate the bright green condition (p = 0.158).
 
+
 ### Parametric beta-distributed model of accuracy
 
 To investigate this with greater statistical power we would need an appropriate parametric model for bounded variables.
 One approach is to use the beta distribution, which is defined between (but not at) 0 and 1.
 
-### Beta model for accuracy
+
+#### Beta model for accuracy
 
 ```{r Set up priors for a Bayesian beta model}
 ### Maximal formula with all random effects ---------------------
@@ -2580,6 +2580,8 @@ print(mod_CI_tb, digits = 3)
 We see here that while the confidence interval for the difference distribution between the two green conditions and the two bright conditions nearly overlap with 0° (and the 0° distribution CI overlap with the mean difference), for differences between green lights and dim UV there is a bimodal distribution with CI that do not overlap with 0°.
 N.B.
 For *one-sided* calculations, the CI do overlap with 0° for green conditions, bright conditions and the leftmost mean for dim conditions.
+
+
 ### Plot difference CI
 
 ```{r Plot CI}
