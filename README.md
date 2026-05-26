@@ -18,5 +18,5 @@ in `Python` as documented in `GUV_circGLMM_fit.ipynb`,
 visualised in `R` in `GUV_circGLMM_summary.RMD`.
 
 
-Printed HTMLs are provided as `GUV_analysis_summary.html`, 
-`GUV_circGLMM_fit.ipynb` and `GUV_circGLMM_summary.html`.
+Printed HTMLs are provided as [`GUV_analysis_summary.html`](GUV_analysis_summary.html), 
+[`GUV_circGLMM_fit.ipynb`](GUV_circGLMM_fit.ipynb) and [`GUV_circGLMM_summary.html`](GUV_circGLMM_summary.html).
