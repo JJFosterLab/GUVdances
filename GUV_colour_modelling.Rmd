@@ -1,0 +1,399 @@
+---
+title: "Colour Modelling"
+date: "`r Sys.Date()`"
+author: "James Foster"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+    toc: true
+    fig_caption: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+## Details
+
+> **DESCRIPTION**
+>
+> Models photoreceptor responses and spectral sensitivities using theoretical visual pigment templates. It simulates UV and green photoreceptor activation curves under experimental LED illumination to analyze relative photoreceptor excitation and the effects of unequal absolute sensitivity.
+
+> **INPUTS**
+>
+> None (self-contained theoretical model)
+
+> **OUTPUTS**
+>
+> `GUV_colour_modelling.html` (rendered report with figures)
+
+> **REFERENCES**
+>
+> Kolyfetis, G. et al. (2025). Unpublished photoreceptor recordings (cell `250327_006`).
+>
+> Menzel, R., Ventura, D. F., Hertel, H., de Souza, J. M. and Greggers, U. (1986). Spectral sensitivity of photoreceptors in insect eyes. *J. Comp. Physiol. A* 158, 361–377.
+>
+> Stavenga, D. G. (2010). On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins. *J. Comp. Physiol. A* 196, 869–878.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This document models photoreceptor responses and sensitivities based on the visual pigment templates described by Stavenga (2010) and physiological measurements of honeybee photoreceptors.
+
+```{r setup_libs, include=FALSE}
+# Load required library for integration functions
+library(sfsmisc)
+```
+
+## Photoreceptor Sensitivity (Stavenga Spline)
+
+We define a function, `StavengaSpline()`, to generate visual pigment template curves for invertebrates. It supports $A1$ pigment types and calculates the $\alpha$-, $\beta$-, and $\gamma$-absorption bands using modified lognormal models.
+
+*Reference:* Stavenga, D. G. (2010). On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins. *Journal of Comparative Physiology A*, 196(11), 869–878.
+
+```{r stavenga_spline}
+# Make a spline template for a visual pigment
+StavengaSpline = function(spec_range = c(300, 700), #bounds of spectrum in nanometers
+                          lambda_max,#peak sensitivity
+                          a_type = 'a1'){#pigment type, only a1 available currently
+  wlns =  seq(from = min(spec_range),
+              to = max(spec_range), 
+              length.out = 1e3) #
+  #Stavenga, D. G. (2010). On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins. Journal of Comparative Physiology A: Neuroethology, Sensory, Neural, and Behavioral Physiology, 196(11), 869–878. doi:10.1007/s00359-010-0568-7
+  # modified lognormal
+  Mlognorm  = function(wl,l_max, a0, a1)
+  {
+    x = log10(wl/l_max)
+    return(
+      exp(-a0*x^2 *
+            (1+a1*x+3*a1^2*x^2)
+      )
+    )
+  }
+  if(a_type == 'a1')
+  {
+    #alpha band
+    a_band = Mlognorm(wl = wlns,
+                      l_max = lambda_max, 
+                      a0 = 380, 
+                      a1 = 6.09)
+    #beta band
+    b_band = 0.29*Mlognorm(wl = wlns, 
+                           l_max = 340, 
+                           a0 = 247, 
+                           a1 = 3.59)
+    #gamma band
+    g_band = 1.99*Mlognorm(wl = wlns, 
+                           l_max = 276, 
+                           a0 = 647, 
+                           a1 = 23.4)
+  }else
+  {stop('a2 and a3 pigments not yet implemented')}
+  # N.B. Stavenga normalises to max(a.band), I normalise to function max
+  r_stav  = (a_band + b_band + g_band)/
+    max(a_band + b_band + g_band)
+  return(    smooth.spline(x = wlns,
+                           y =  r_stav)    )
+}#StavengaSpline <- function(spec.range, lambda.max)
+```
+
+## Photoreceptor Response Function
+
+We model the photoreceptor response (in mV) to light intensity (photons/cm²/s) using a Naka-Rushton-like function. The parameters are based on honeybee photoreceptor recordings from Kolyfetis et al. (2025).
+
+*Reference Spreadsheet:* [Kolyfetis et al. (2025) Data](https://docs.google.com/spreadsheets/d/18r4MJe30J2Hgh7MQHX0us8KqTKhufxmgN_C4IpbRGmc/edit?gid=2023063010#gid=2023063010&range=A1:F1)
+
+```{r photoreceptor_response}
+# Define a function for photoreceptor response
+#params based on 250327_006 from Kolyfetis et al., 2025
+PRresponse = function(
+            quanta = 10^seq(from = 10, to  = 14, length.out = 21), #photons/cm2/s
+            vmax = 50,#mV
+            k50 = 0.03*1e14,#inflection point
+            n = 1.07)#slope
+  {
+mV = (vmax*quanta^n)/ 
+      (k50^n + quanta^n)
+}
+#this sets sensitivity in the following way
+## rel_quanta = quanta/max(quanta)
+## yy = mV/vmax
+## sensitivity = k50*(yy/(1-yy))^(n^-1)
+```
+
+## Wavelengths of Interest
+
+We establish parameters for the response peaks of honeybee photoreceptors (Menzel et al., 1986) and the emission peaks for the experimental ultraviolet and green LEDs, using a 20nm bandwidth range for the LED spectral distribution.
+
+```{r wavelengths_of_interest}
+# Response peak for honeybee photoreceptors Menzel et al., 1986
+lmax_u = 343
+lmax_g = 543
+# Emission peak for each LED
+led_u = 365
+led_g = 528
+# A 20nm (uniform) band for each 
+wlband = seq(from = -10, to  = 10, by = 0.1)
+```
+
+## Sensitivity Curve Predictions
+
+Using our Stavenga Splines, we predict the photoreceptors' sensitivity curves across the entire spectrum and specifically for the LED emission bands. We also calculate the integrated sensitivity for the green photoreceptor under green and UV LEDs to find its relative UV sensitivity (`g_rel_u`).
+
+```{r predict_sensitivities}
+# Predict sensitivity curves across whole spectrum
+u_photopig = predict(StavengaSpline(lambda_max = lmax_u))
+g_photopig = predict(StavengaSpline(lambda_max = lmax_g))
+
+# Specifically for the LEDs
+#green photoreceptor
+gPR_uLED = predict(StavengaSpline(lambda_max = lmax_g), x = led_u + wlband)
+gPR_gLED = predict(StavengaSpline(lambda_max = lmax_g), x = led_g + wlband)
+#UV photoreceptor
+uPR_gLED = predict(StavengaSpline(lambda_max = lmax_u), x = led_g + wlband)
+uPR_uLED = predict(StavengaSpline(lambda_max = lmax_u), x = led_u + wlband)
+
+# integrated sensitivity
+sens_gPR_uLED = integrate.xy(gPR_uLED)
+sens_gPR_gLED = integrate.xy(gPR_gLED)
+g_rel_u = sens_gPR_uLED/sens_gPR_gLED
+```
+
+## Set Up Response Curve Data
+
+We define a wide range of UV intensities (photons/cm²/s) and compute simulated response curves for the UV and green photoreceptors under different absolute sensitivity assumptions.
+
+```{r setup_response_data}
+xx = 10^seq(from = 11, to  = 15, length.out = 1e3) #photons/cm2/s
+example_g_equal = PRresponse(k50 = 3e12/g_rel_u, quanta = xx)
+example_g_lows = PRresponse(k50 = 3e13/g_rel_u, quanta = xx)
+example_u = PRresponse(k50 = 3e12, quanta = xx)
+
+#set margins all around for individual plots
+par(mar = c(4.5,4.5,4.5,4.5))
+```
+
+## Photoreceptor Response: Equal Absolute Sensitivity
+
+First, we plot simulated response curves assuming the green and UV photoreceptors have equal absolute sensitivity. We also compute and overlay the log ratio of green to UV photoreceptor responses.
+
+```{r plot_equal_sensitivity}
+#open plot with green photoreceptor
+plot(x = xx,
+     y = example_g_equal,
+     type = 'l',
+     col = 'green',
+     lwd = 5,
+     log = 'x',
+     ylim = c(0, 50),
+     main = 'equal absolute sensitivity',
+     xlab = 'UV intensity (photons/cm2/s)',
+     ylab = 'photoreceptor response (mV)')
+#add UV photoreceptor
+lines(x = xx,
+     y = example_u,
+     col = 'magenta',
+     lwd = 5)
+#add reference lines
+abline(h = c(0,0.5,1.0)*50,
+       v = 10^c(11:15),
+       col = 'gray')
+#add LEDs
+abline(v = c(1.2e12, 4e12, 4e14),
+       col = c('magenta4', 'purple', 'magenta'))
+#label curves
+text(x = 10^c(12, 13.5, 13.7),
+     y = c(25, 25, 30),
+     labels = c('UV\nphotor.',
+                'green\nphotor.',
+                'log ratio'),
+     col = c('magenta', 'green', 'purple4')
+     )
+#add log ratio
+#open new plot
+par(new = TRUE)
+plot(x = xx,
+     y = log(example_g_equal/example_u),
+     type = 'l',
+     ylim = c(-1.55, 0),
+     log = 'x',
+     lwd = 5,
+     col = 'purple4',
+     axes = FALSE,
+     xlab = '',
+     ylab = '')
+#add axis
+axis(side = 4,
+     col = 'purple4')
+#add axis label
+mtext(side = 4,
+      line = 2,
+      text = 'log(green/UV)',
+      col = 'purple4')
+```
+
+## Photoreceptor Response: Account for Sensitivity Difference
+
+Next, we plot the response curves under a scenario where the green photoreceptor has a lower absolute sensitivity (higher semi-saturation constant $k_{50}$) than the UV photoreceptor.
+
+```{r plot_lower_sensitivity}
+plot(x = xx,
+     y = example_g_lows,
+     type = 'l',
+     col = 'green',
+     lwd = 5,
+     log = 'x',
+     ylim = c(0, 50),
+     main = 'green lower absolute sensitivity',
+     xlab = 'UV intensity (photons/cm2/s)',
+     ylab = 'photoreceptor response (mV)')
+lines(x = xx,
+     y = example_u,
+     col = 'magenta',
+     lwd = 5)
+#add reference lines
+abline(h = c(0,0.5,1.0)*50,
+       v = 10^c(11:15),
+       col = 'gray')
+#add LEDs
+abline(v = c(1.2e12, 4e12, 4e14),
+       col = c('magenta4', 'purple', 'magenta'))
+#label curves
+text(x = 10^c(12.2, 14.4, 13.7),
+     y = c(25, 25, 25),
+     labels = c('UV\nphotor.',
+                'green\nphotor.',
+                'log ratio'),
+     col = c('magenta', 'green', 'purple4')
+)
+#add log ratio
+#open new plot
+par(new = TRUE)
+plot(x = xx,
+     y = log(example_g_lows/example_u),
+     type = 'l',
+     ylim = c(-4.0, 0),
+     log = 'x',
+     lwd = 5,
+     col = 'purple4',
+     axes = FALSE,
+     xlab = '',
+     ylab = '')
+
+axis(side = 4,
+     col = 'purple4')
+mtext(side = 4,
+      line = 2,
+      text = 'log(green/UV)',
+      col = 'purple4')
+```
+
+## Visualizing Figure 4
+
+This combined two-panel figure presents:
+1. The relative photoreceptor sensitivity profiles for both UV and green photoreceptors with integrated shaded areas for the UV and green LEDs.
+2. The simulated response functions for both UV and green photoreceptors under the equal absolute sensitivity assumption, alongside the ratio of green to UV response on the right-hand axis.
+
+```{r figure_4, fig.width=10, fig.height=5}
+par(mfrow = c(1,2),
+    mar = c(5,5,0,3))
+plot(u_photopig,
+     type = 'l',
+     lwd = 5,
+     col = 'magenta',
+     xlim = c(300, 700),
+     ylim = c(0,1),
+     xlab = 'wavelength (nm)',
+     ylab = 'photoreceptor sensitivity\n(relative)',
+     )
+lines(g_photopig,
+      lwd = 5,
+      col = 'green')
+
+with(uPR_uLED,
+  polygon(x = c(x, rev(x)),
+          y = c(y, rep(0, length(y))),
+          col = adjustcolor('magenta',
+                            alpha.f = 0.2),
+          border = NA)
+)
+with(uPR_gLED,
+  polygon(x = c(x, rev(x)),
+          y = c(y, rep(0, length(y))),
+          col = adjustcolor('magenta',
+                            alpha.f = 0.2),
+          border = NA)
+)
+
+with(gPR_uLED,
+  polygon(x = c(x, rev(x)),
+          y = c(y, rep(0, length(y))),
+          col = adjustcolor('green',
+                            alpha.f = 0.2),
+          border = NA)
+)
+with(gPR_gLED,
+  polygon(x = c(x, rev(x)),
+          y = c(y, rep(0, length(y))),
+          col = adjustcolor('green',
+                            alpha.f = 0.2),
+          border = NA)
+)
+abline(h = c(0,1.0),
+       v = 100*c(3:7),
+       col = 'gray')
+
+
+plot(x = xx,
+     y = example_g_equal,
+     type = 'l',
+     col = 'green',
+     lwd = 5,
+     log = 'x',
+     ylim = c(0, 50),
+     xlab = 'UV intensity (photons/cm2/s)',
+     ylab = 'photoreceptor response (mV)')
+lines(x = xx,
+      y = example_u,
+      col = 'magenta',
+      lwd = 5)
+#add reference lines
+abline(h = c(0,0.5,1.0)*50,
+       v = 10^c(11:15),
+       col = 'gray')
+#add LEDs
+abline(v = c(1.2e12, 4e12, 4e14),
+       col = c('magenta4', 'purple', 'magenta'))
+#label curves
+text(x = 10^c(12.2, 14.4, 13.7),
+     y = c(25, 25, 25),
+     labels = c('UV\nphotor.',
+                'green\nphotor.',
+                'ratio'),
+     col = c('magenta', 'green', 'purple4')
+)
+#add ratio
+#open new plot
+par(new = TRUE)
+plot(x = xx,
+     y = example_g_equal/example_u,
+     type = 'l',
+     ylim = c(0, 1),
+     log = 'x',
+     lwd = 5,
+     col = 'purple4',
+     axes = FALSE,
+     xlab = '',
+     ylab = '')
+
+axis(side = 4,
+     col = 'purple4')
+mtext(side = 4,
+      line = 2,
+      text = 'green/UV',
+      col = 'purple4')
+```
