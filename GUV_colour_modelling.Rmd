@@ -430,25 +430,34 @@ mtext(side = 4,
 
 ### Set up stimuli
 
+- Purpose: build LED_rspec (wl + emission curves) using Cauchy fits, convert photon flux to µmol/m²/s, create named stimulus columns (UVdimmer/UVdim/UVbright, Gdim/Gbright) and plot them.
+
+- Key inputs: led_u, led_g, wlband, micromol_stim vector. Uses dcauchy and plotting/polygon calls.
+
+- Outputs: LED_rspec data.frame and an emission plot.
+
+- Checks: ensure led_u/led_g/wlband exist, dcauchy is available, unit conversions correct, and intermediate columns removed intentionally (rm).
+
 ```{r setup-stimulus-spectrum}
 LED_rspec = data.frame(wl = seq(from = 300,
                                 to = 700,
                                 by = 1.0) # pavo only uses 1 nm increments
                        )
-# LED_rspec = within(LED_rspec,
-#                    {
-#                      LEDu = ifelse(test = wl > min(led_u + wlband) & wl < max(led_u + wlband),
-#                                    yes = 1,
-#                                    no = 0
-#                                    )
-#                      LEDg = ifelse(test = wl > min(led_g + wlband) & wl < max(led_g + wlband),
-#                                    yes = 1,
-#                                    no = 0
-#                                    )
-#                    }
-#                    )
+#uniform version
+LED_rspec_rect = within(LED_rspec,
+                   {
+                     LEDu = ifelse(test = wl > min(led_u + wlband) & wl < max(led_u + wlband),
+                                   yes = 1,
+                                   no = 0
+                                   )
+                     LEDg = ifelse(test = wl > min(led_g + wlband) & wl < max(led_g + wlband),
+                                   yes = 1,
+                                   no = 0
+                                   )
+                   }
+                   )
 
-#uniform spectra fail for colour calculations, use Cauchy (typical LED emission)
+#Cauchy (typical LED emission)
 LED_rspec = within(LED_rspec,
                    {
                      LEDu = dcauchy(x = wl,
@@ -483,39 +492,105 @@ LED_rspec = within(LED_rspec,
                      rm('LEDu', 'LEDg')
                    }
                    )
+LED_rspec_rect = within(LED_rspec_rect,
+                   {
+                     UVdimmer = micromol_stim['dimmer']*
+                       LEDu/ # at those wavelengths in the LED emission halfmax
+                       diff(range(wlband)) #divide by width (nm)
+                     UVdim = micromol_stim['dim']*LEDu/
+                        diff(range(wlband))
+                     UVbright = micromol_stim['bright']*LEDu/
+                        diff(range(wlband))
+                     Gdim = micromol_stim['dim']*LEDg/
+                        diff(range(wlband))
+                     Gbright = micromol_stim['bright']*LEDg/
+                        diff(range(wlband))
+                     rm('LEDu', 'LEDg')
+                   }
+                   )
 
-with(LED_rspec,
-     {
-      plot(x = wl,
-           y = UVbright,
-           type = 'l',
-           col = 'magenta',
-           # log = 'y',
-           xlab = 'wavelength (nm)',
-           ylab = 'intensity (micro mol/m2/s)',
-           main = 'Simplified stimuli')
-       lines(x = wl,
-           y = Gbright,
-           col = 'green3')       
-       # lines(x = wl,
-       #     y = Gdim,
-       #     col = 'darkgreen')
-       # lines(x = wl,
-       #     y = UVdim,
-       #     col = 'purple')
-       polygon(x = c(wl, rev(wl)),
-           y = c(Gdim, rep(0, times = length(wl))),
-           col = 'darkgreen',
-           bg = adjustcolor('darkgreen', alpha.f = 0.7))
-       polygon(x = c(wl, rev(wl)),
-           y = c(UVdim, rep(0, times = length(wl))),
-           col = 'purple',
-           bg = adjustcolor('purple', alpha.f = 0.7))
-     }
-     )
+# Open a blank frame wrapper with explicit limits 
+vls = unlist(c(LED_rspec[-1], LED_rspec_rect[-1]))
+mn = min(vls[vls>0])
+plot(
+  x = NULL, 
+  xlim = c(300, 700), 
+  ylim = c(mn,
+           max(vls)
+           ),
+  log = 'y',
+  xlab = 'Wavelength (nm)',
+  ylab = 'Intensity (µmol/m²/s)',
+  main = 'Simplified Stimuli Profiles'
+)
+#Smooth LEDs
+with(LED_rspec, {
+  # Bright Cauchy Profiles
+  polygon(
+    x = c(wl, rev(wl)),
+    y = c(UVbright, rep(mn, times = length(wl))),
+    col = adjustcolor('magenta', alpha.f = 0.1),
+    border = 'magenta'
+  )
+
+  polygon(
+    x = c(wl, rev(wl)),
+    y = c(Gbright, rep(mn, times = length(wl))),
+    col = adjustcolor('green3', alpha.f = 0.1),
+    border = 'green3'
+  )
+
+  # Dim Cauchy Profiles
+  polygon(
+    x = c(wl, rev(wl)),
+    y = c(Gdim, rep(mn, times = length(wl))),
+    col = adjustcolor('darkgreen', alpha.f = 0.25),
+    border = 'darkgreen'
+  )
+
+  polygon(
+    x = c(wl, rev(wl)),
+    y = c(UVdim, rep(mn, times = length(wl))),
+    col = adjustcolor('purple', alpha.f = 0.25),
+    border = 'purple'
+  )
+})
+# Unform LEDs
+with(LED_rspec_rect, {
+  # Plot uniform blocks using step lines ("s") so they don't angle down awkwardly
+  lines(x = wl, 
+        y = UVbright +mn, 
+        type = 's', 
+        col = 'purple4', 
+        lwd = 2.5)
+  lines(x = wl, 
+        y = Gbright +mn, 
+        type = 's', 
+        col = 'forestgreen', 
+        lwd = 2.5)
+
+  lines(x = wl, 
+        y = UVdim +mn, 
+        type = 's', 
+        col = 'purple4', 
+        lty = 3, 
+        lwd = 2)
+  lines(x = wl, 
+        y = Gdim +mn, 
+        type = 's', 
+        col = 'forestgreen', 
+        lty = 3, 
+        lwd = 2)
+})
+
 ```
 
 ### Simulate quantum catches
+
+• Purpose: compute photoreceptor quantum catches (pavo::vismodel), map into colour space (colspace), and compute chromatic/achromatic distances (coldist) including a rescaled run to avoid log errors.
+• Key inputs: LED_rspec, visual="apis", illum/bkg settings, scale=1e6 for brighter run.
+• Outputs: qcatches, bee_space, percept_distances, bee_jnd (JND dS/dL).
+• Checks: pass vismodel object (not colspace) to coldist when required; if you see log-scale errors, adjust `scale` or `bkg`; confirm `relative`/`vonkries` choices match experiment.
 
 ```{r simulate-catch}
 qcatches = vismodel(
@@ -568,6 +643,10 @@ print(bee_jnd, digits = 3)
 
 ### Plot stimuli
 
+• Purpose: visualise points in trichromatic colour space (triplot), add legend, then plot perceptual separation (dS vs dL) with JND threshold shading and labelled pairwise points.
+• Key inputs: bee_space, bee_jnd (dS,dL,patch1,patch2) and colour mappings.
+• Outputs: 1×2 panel — colour-space triangle and JND scatter with polygons/labels.
+• Checks: ensure dS/dL/patch1/patch2 exist and orders of colour vectors match point order; adjust xlim/ylim if outliers; legend colours must map to existing names.
 ```{r colour_space_stimuli}
 
 
@@ -583,7 +662,7 @@ triplot(
          Gdim = 'darkgreen',
          UVbright = 'magenta',
          UVdim = 'purple',
-         UVdimmer = "purple4"), 
+         UVdimmer = "magenta4"), 
   bg = gray(1.0, alpha = 0.3),
   lwd = 2,
   cex = 1.8,              # Size of the points
@@ -602,7 +681,7 @@ legend(
          Gdim = 'darkgreen',
          UVbright = 'magenta',
          UVdim = 'purple',
-         UVdimmer = "purple4"), 
+         UVdimmer = "magenta4"), 
   pt.bg = gray(1.0, alpha = 0.5),
   pch = 21, 
   pt.cex = 1.0,
@@ -652,13 +731,13 @@ points(
   bg = c(Gbright_Gdim =  'darkgreen',
   Gbright_UVbright = 'magenta',
   Gbright_UVdim =  'purple',
-  Gbright_UVdimmer = 'purple4',
+  Gbright_UVdimmer = 'magenta4',
   Gdim_UVbright = 'magenta',
   Gdim_UVdim = 'purple',
-  Gdim_UVdimmer = 'purple4',
+  Gdim_UVdimmer = 'magenta4',
   UVbright_UVdim = 'purple',
-  UVbright_UVdimmer = 'purple4',
-  UVdim_UVdimmer = 'purple4'),
+  UVbright_UVdimmer = 'magenta4',
+  UVdim_UVdimmer = 'magenta4'),
   cex = 1.5,
   lwd = 2
 )
@@ -681,82 +760,108 @@ text(
 ```
 
 
-## Saturation model - WIP!
+## Bezold-Brücke model
+
+• Purpose: simulate an intensity sweep (Bezold–Brücke) for a 365 nm LED: get receptor sensitivity matrix from vismodel, map photon flux → receptor mV (PRresponse), compute JND shift (manual RNL), and plot intensity-dependent hue shift.
+• Key inputs: LED_rspec (UVdimmer), PRresponse function, flux_range, sens_matrix, RNL noise params (n_ratios, weber).
+• Outputs: ds_shifts vector and log-x plot showing predicted chromatic shift vs intensity.
+• Checks: PRresponse must be defined and return consistent units; sens_matrix must have correct row name ("UVdimmer"); watch numeric stability for very large flux values and ensure weber/e_param choice is appropriate.
 
 ```{r model-saturation}
 
-# --- PART 1: Use pavo to get the relative spectral overlap ratios ---
-# Generate standard 1-nm curves
-wl_vector <- 300:700
-uv_source    <- dcauchy(wl_vector, location = 365, scale = 10)
-green_source <- dcauchy(wl_vector, location = 528, scale = 10)
+# --- Use pavo to get the relative spectral overlap ratios ---
 
-stimulated_spectra <- as.rspec(data.frame(wl = wl_vector, uv_led = uv_source, green_led = green_source))
+stimulated_spectra = as.rspec(LED_rspec[c('wl','UVdimmer')])
 
 # Get clean, un-normalized sensitivity weights (relative = FALSE, scale = 1)
 # This extracts the exact proportion of light each receptor type captures per wavelength
-base_weights <- vismodel(
+base_weights = vismodel(
   rspecdata = stimulated_spectra,
-  visual = "apis", achromatic = "l", illum = "ideal", bkg = 0, vonkries = FALSE, relative = FALSE, scale = 1
+  visual = "apis",
+  achromatic = "l",
+  illum = "ideal",
+  bkg = 0,
+  vonkries = FALSE,
+  relative = FALSE,
+  scale = 1
 )
 
 # Extract just the UV (s), Blue (m), and Green (l) sensitivity matrix
-sens_matrix <- as.matrix(base_weights[, c("s", "m", "l")])
+sens_matrix = as.matrix(base_weights[, c("s", "m", "l")])
 
 
-# --- PART 2: Define your custom biological mV function ---
-# Modify it slightly to accept your calculated physical photon flux scaling
-PRresponse <- function(quanta, vmax = 50, k50 = 0.03 * 1e14, n_slope = 1.07) {
-  mV <- (vmax * quanta^n_slope) / (k50^n_slope + quanta^n_slope)
-  return(mV)
-}
 
 
-# --- PART 3: Simulate the Bezold–Brücke intensity sweep ---
+# --- Simulate the Bezold–Brücke intensity sweep ---
 # We will scale a single 365nm UV LED across your experimental range
-flux_range <- 10^seq(from = 10, to = 14, length.out = 21) # photons/cm2/s
-ds_shifts  <- numeric(length(flux_range))
+flux_range = 10^seq(from = 10,
+                    to = 15,
+                    length.out = 1e3) # photons/cm2/s
+ds_shifts = numeric(length(flux_range))
 
 # Calculate the millivolt baseline at your lowest intensity (10^10 photons)
 # Multiplying the flux by the sensitivity matrix distributes the photons across the channels
-phi_baseline <- flux_range[1] * sens_matrix["uv_led", ]
-mv_baseline  <- PRresponse(phi_baseline)
+phi_baseline = flux_range[1] * sens_matrix["UVdimmer", ]
+mv_baseline = PRresponse(phi_baseline)
 
-# Standard apis RNL noise parameters
-n_ratios <- c(1, 2, 6) # UV, Blue, Green receptor abundance
-weber    <- 0.05
-e        <- sqrt(weber^2 + 1/n_ratios)
+# Standard Apis RNL noise parameters
+n_ratios  = c(1, 2, 6) # UV, Blue, Green receptor abundance
+weber    =  0.05
+e_param  = sqrt(weber^2 + 1/n_ratios)
 
 # --- PART 4: Compute the JND color shift manually ---
 for(i in 1:length(flux_range)) {
   # Calculate actual photons caught by each receptor type at this specific brightness
-  phi_current <- flux_range[i] * sens_matrix["uv_led", ]
+  phi_current = flux_range[i] * sens_matrix["UVdimmer", ]
   
   # CRITICAL PHYSIOLOGY STEP: Convert the photons into true millivolts using your function
-  mv_current  <- PRresponse(phi_current)
+  mv_current = PRresponse(phi_current)
   
   # In visual ecology, when using real mV responses, the signal difference 
   # is modeled as the direct subtraction of millivolts divided by noise, 
   # bypassing pavo's log step because the Naka-Rushton curves ALREADY handle the scaling compression!
-  delta_signal <- mv_current - mv_baseline
+  delta_signal = mv_current - mv_baseline
   
   # Manual RNL distance formula for trichromats
-  num <- (delta_signal[2] - delta_signal[3])^2 * e[1]^2 + 
-         (delta_signal[3] - delta_signal[1])^2 * e[2]^2 + 
-         (delta_signal[1] - delta_signal[2])^2 * e[3]^2
-  den <- e[1]^2 * e[2]^2 + e[2]^2 * e[3]^2 + e[3]^2 * e[1]^2
+  num_param <- (delta_signal[2] - delta_signal[3])^2 *
+    e_param[1]^2 +
+    (delta_signal[3] - delta_signal[1])^2 * e_param[2]^2 +
+    (delta_signal[1] - delta_signal[2])^2 * e_param[3]^2
   
-  ds_shifts[i] <- sqrt(num / den)
+  den_param <- e_param[1]^2 *
+    e_param[2]^2 +
+    e_param[2]^2 * e_param[3]^2 +
+    e_param[3]^2 * e_param[1]^2
+  
+  ds_shifts[i] <- sqrt(num_param / den_param)
 }
 
-# --- PART 5: Plot your Intensity-dependent Hue Shift ---
+# --- Plot your Intensity-dependent Hue Shift ---
 plot(
-  log10(flux_range), ds_shifts,
-  type = "b", pch = 19, col = "purple",
-  xlab = "Log10 Photon Flux (photons/cm²/s)",
-  ylab = "Chromatic Distance Shift (dS in JNDs)",
-  main = "Predicted Bezold–Brücke Shift for 365nm LED"
+  x = NULL,
+  log = 'x',
+  type = "l", 
+  xlab = "UV intensity (photons/cm2/s)",
+  ylab = "Chromatic Distance Shift (JND)",
+  main = "Predicted Bezold–Brücke Shift for 365nm LED",
+  ylim = c(0,1)*2,
+  xlim = range(flux_range)
 )
-abline(h = 1, lty = 2, col = "red", lwd = 1.5) # The 1 JND threshold line
+abline(h = 0)
+polygon(y = c(0,1,1,0),
+        x = rev(sort(rep(range(flux_range)*c(0.1, 10),times = 2))),
+        col = gray(0.5, 0.2),
+        border = NA
+        )
+lines(x = flux_range, 
+  y = ds_shifts,
+    pch = 19,
+  col = "purple4",
+  lwd = 5
+  )
+#add LEDs
+abline(v = c(1.2e12, 4e12, 4e14),
+       col = c('magenta4', 'purple', 'magenta'),
+       lwd = 2)
 
 ```
