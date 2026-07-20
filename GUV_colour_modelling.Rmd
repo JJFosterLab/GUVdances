@@ -17,7 +17,8 @@ editor_options:
 
 > **DESCRIPTION**
 >
-> Models photoreceptor responses and spectral sensitivities using theoretical visual pigment templates. It simulates UV and green photoreceptor activation curves under experimental LED illumination to analyze relative photoreceptor excitation and the effects of unequal absolute sensitivity.
+> Models photoreceptor responses and spectral sensitivities using theoretical visual pigment templates.
+> It simulates UV and green photoreceptor activation curves under experimental LED illumination to analyze relative photoreceptor excitation and the effects of unequal absolute sensitivity.
 
 > **INPUTS**
 >
@@ -29,12 +30,23 @@ editor_options:
 
 > **REFERENCES**
 >
-> Kolyfetis, G. et al. (2025). Unpublished photoreceptor recordings (cell `250327_006`).
+> Menzel, R., Ventura, D. F., Hertel, H., de Souza, J. M.
+> and Greggers, U.
+> (1986).
+> Spectral sensitivity of photoreceptors in insect eyes.
+> *J. Comp. Physiol. A* 158, 361–377.
 >
-> Menzel, R., Ventura, D. F., Hertel, H., de Souza, J. M. and Greggers, U. (1986). Spectral sensitivity of photoreceptors in insect eyes. *J. Comp. Physiol. A* 158, 361–377.
+> Stavenga, D. G.
+> (2010).
+> On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins.
+> *J. Comp. Physiol. A* 196, 869–878.
 >
-> Stavenga, D. G. (2010). On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins. *J. Comp. Physiol. A* 196, 869–878.
-
+> Kolyfetis, G.
+> *et al.* (2025).
+> Electrophysiological recordings reveal photoreceptor coupling in the dorsal rim areas of honeybee and bumblebee eyes.
+> Biol.
+> Lett.
+> 21:20250234.https://doi.org/10.1098/rsbl.2025.0234
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -44,16 +56,20 @@ knitr::opts_chunk$set(echo = TRUE)
 
 This document models photoreceptor responses and sensitivities based on the visual pigment templates described by Stavenga (2010) and physiological measurements of honeybee photoreceptors.
 
-```{r setup_libs, include=FALSE}
-# Load required library for integration functions
-library(sfsmisc)
+```{r setup_packages}
+# Package for integration of functions
+require("sfsmisc")
+# Package for colour modelling
+require("pavo")
 ```
 
-## Photoreceptor Sensitivity (Stavenga Spline)
 
-We define a function, `StavengaSpline()`, to generate visual pigment template curves for invertebrates. It supports $A1$ pigment types and calculates the $\alpha$-, $\beta$-, and $\gamma$-absorption bands using modified lognormal models.
+## Retina-level model
 
-*Reference:* Stavenga, D. G. (2010). On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins. *Journal of Comparative Physiology A*, 196(11), 869–878.
+### Photoreceptor Sensitivity
+
+We define a function, `StavengaSpline()`, to generate visual pigment template curves for invertebrates.
+It supports $A1$ pigment types and calculates the $\alpha$-, $\beta$-, and $\gamma$-absorption bands using modified lognormal models.
 
 ```{r stavenga_spline}
 # Make a spline template for a visual pigment
@@ -63,7 +79,6 @@ StavengaSpline = function(spec_range = c(300, 700), #bounds of spectrum in nanom
   wlns =  seq(from = min(spec_range),
               to = max(spec_range), 
               length.out = 1e3) #
-  #Stavenga, D. G. (2010). On visual pigment templates and the spectral shape of invertebrate rhodopsins and metarhodopsins. Journal of Comparative Physiology A: Neuroethology, Sensory, Neural, and Behavioral Physiology, 196(11), 869–878. doi:10.1007/s00359-010-0568-7
   # modified lognormal
   Mlognorm  = function(wl,l_max, a0, a1)
   {
@@ -101,17 +116,20 @@ StavengaSpline = function(spec_range = c(300, 700), #bounds of spectrum in nanom
 }#StavengaSpline <- function(spec.range, lambda.max)
 ```
 
-## Photoreceptor Response Function
 
-We model the photoreceptor response (in mV) to light intensity (photons/cm²/s) using a Naka-Rushton-like function. The parameters are based on honeybee photoreceptor recordings from Kolyfetis et al. (2025).
+### Response Function
 
-*Reference Spreadsheet:* [Kolyfetis et al. (2025) Data](https://docs.google.com/spreadsheets/d/18r4MJe30J2Hgh7MQHX0us8KqTKhufxmgN_C4IpbRGmc/edit?gid=2023063010#gid=2023063010&range=A1:F1)
+We model the photoreceptor response (in mV) to light intensity (photons/cm²/s) using a Naka-Rushton-like function.
+The parameters are based on honeybee photoreceptor recordings from Kolyfetis *et al.* (2025).
+See `1Data/250327_009_Apis_MainRetina_Kolyfetis2025.pdf`.
 
 ```{r photoreceptor_response}
 # Define a function for photoreceptor response
 #params based on 250327_006 from Kolyfetis et al., 2025
 PRresponse = function(
-            quanta = 10^seq(from = 10, to  = 14, length.out = 21), #photons/cm2/s
+            quanta = 10^seq(from = 10, 
+                            to  = 14, 
+                            length.out = 21), #photons/cm2/s
             vmax = 50,#mV
             k50 = 0.03*1e14,#inflection point
             n = 1.07)#slope
@@ -125,7 +143,6 @@ mV = (vmax*quanta^n)/
 ## sensitivity = k50*(yy/(1-yy))^(n^-1)
 ```
 
-## Wavelengths of Interest
 
 We establish parameters for the response peaks of honeybee photoreceptors (Menzel et al., 1986) and the emission peaks for the experimental ultraviolet and green LEDs, using a 20nm bandwidth range for the LED spectral distribution.
 
@@ -137,12 +154,16 @@ lmax_g = 543
 led_u = 365
 led_g = 528
 # A 20nm (uniform) band for each 
-wlband = seq(from = -10, to  = 10, by = 0.1)
+wlband = seq(from = -10, 
+             to  = 10, 
+             by = 0.1)
 ```
 
-## Sensitivity Curve Predictions
 
-Using our Stavenga Splines, we predict the photoreceptors' sensitivity curves across the entire spectrum and specifically for the LED emission bands. We also calculate the integrated sensitivity for the green photoreceptor under green and UV LEDs to find its relative UV sensitivity (`g_rel_u`).
+### Sensitivity Curve Predictions
+
+We predict the photoreceptors' sensitivity curves across the insect-visible spectrum and specifically for the LED emission bands.
+We also calculate the integrated sensitivity for the green photoreceptor under green and UV LEDs to find its relative UV sensitivity (`g_rel_u`).
 
 ```{r predict_sensitivities}
 # Predict sensitivity curves across whole spectrum
@@ -163,9 +184,9 @@ sens_gPR_gLED = integrate.xy(gPR_gLED)
 g_rel_u = sens_gPR_uLED/sens_gPR_gLED
 ```
 
-## Set Up Response Curve Data
+### Set Up Response Curve Data
 
-We define a wide range of UV intensities (photons/cm²/s) and compute simulated response curves for the UV and green photoreceptors under different absolute sensitivity assumptions.
+We define a range of UV intensities (photons/cm²/s) and compute simulated response curves for the UV and green photoreceptors under different absolute sensitivity assumptions.
 
 ```{r setup_response_data}
 xx = 10^seq(from = 11, to  = 15, length.out = 1e3) #photons/cm2/s
@@ -177,9 +198,10 @@ example_u = PRresponse(k50 = 3e12, quanta = xx)
 par(mar = c(4.5,4.5,4.5,4.5))
 ```
 
-## Photoreceptor Response: Equal Absolute Sensitivity
+### Equal Absolute Sensitivity
 
-First, we plot simulated response curves assuming the green and UV photoreceptors have equal absolute sensitivity. We also compute and overlay the log ratio of green to UV photoreceptor responses.
+First, we plot simulated response curves assuming the green and UV photoreceptors have equal absolute sensitivity.
+We also compute and overlay the log ratio of green to UV photoreceptor responses.
 
 ```{r plot_equal_sensitivity}
 #open plot with green photoreceptor
@@ -236,7 +258,7 @@ mtext(side = 4,
       col = 'purple4')
 ```
 
-## Photoreceptor Response: Account for Sensitivity Difference
+### Account for Sensitivity Difference
 
 Next, we plot the response curves under a scenario where the green photoreceptor has a lower absolute sensitivity (higher semi-saturation constant $k_{50}$) than the UV photoreceptor.
 
@@ -292,11 +314,16 @@ mtext(side = 4,
       col = 'purple4')
 ```
 
-## Visualizing Figure 4
+### Photoreceptor Contrast
 
-This combined two-panel figure presents:
-1. The relative photoreceptor sensitivity profiles for both UV and green photoreceptors with integrated shaded areas for the UV and green LEDs.
-2. The simulated response functions for both UV and green photoreceptors under the equal absolute sensitivity assumption, alongside the ratio of green to UV response on the right-hand axis.
+This combined two-panel figure presents: 
+
+1. 
+The relative photoreceptor sensitivity profiles for both UV and green photoreceptors with integrated shaded areas for the UV and green LEDs.
+
+
+2. 
+The simulated response functions for both UV and green photoreceptors under the equal absolute sensitivity assumption, alongside the ratio of green to UV response on the right-hand axis.
 
 ```{r figure_4, fig.width=10, fig.height=5}
 par(mfrow = c(1,2),
@@ -396,4 +423,340 @@ mtext(side = 4,
       line = 2,
       text = 'green/UV',
       col = 'purple4')
+```
+
+
+## Colour model
+
+### Set up stimuli
+
+```{r setup-stimulus-spectrum}
+LED_rspec = data.frame(wl = seq(from = 300,
+                                to = 700,
+                                by = 1.0) # pavo only uses 1 nm increments
+                       )
+# LED_rspec = within(LED_rspec,
+#                    {
+#                      LEDu = ifelse(test = wl > min(led_u + wlband) & wl < max(led_u + wlband),
+#                                    yes = 1,
+#                                    no = 0
+#                                    )
+#                      LEDg = ifelse(test = wl > min(led_g + wlband) & wl < max(led_g + wlband),
+#                                    yes = 1,
+#                                    no = 0
+#                                    )
+#                    }
+#                    )
+
+#uniform spectra fail for colour calculations, use Cauchy (typical LED emission)
+LED_rspec = within(LED_rspec,
+                   {
+                     LEDu = dcauchy(x = wl,
+                                    location = led_u,
+                                    scale = diff(range(wlband))/2 # for Cauchy FWHM = 2γ
+                                   )
+                     LEDg = dcauchy(x = wl,
+                                    location = led_g,
+                                    scale = diff(range(wlband))/2 # for Cauchy FWHM = 2γ
+                                   )
+                   }
+                   )
+#convert photon flux from photons/cm2/s to micro mol/m2/s
+micromol_stim <- c(dimmer = 1.2e12, dim = 4e12, bright = 4e14) *
+                    1e4 * #cm2 -> m2
+                    1e6 / #mol -> micromol
+                    6.022e23 # Avogadro's number
+
+LED_rspec = within(LED_rspec,
+                   {
+                     UVdimmer = micromol_stim['dimmer']*
+                       LEDu#/ # at those wavelengths in the LED emission halfmax
+                       # diff(range(wlband)) #divide by width (nm)
+                     UVdim = micromol_stim['dim']*LEDu#/
+                       # diff(range(wlband))
+                     UVbright = micromol_stim['bright']*LEDu#/
+                       # diff(range(wlband))
+                     Gdim = micromol_stim['dim']*LEDg#/
+                       # diff(range(wlband))
+                     Gbright = micromol_stim['bright']*LEDg#/
+                       # diff(range(wlband))
+                     rm('LEDu', 'LEDg')
+                   }
+                   )
+
+with(LED_rspec,
+     {
+      plot(x = wl,
+           y = UVbright,
+           type = 'l',
+           col = 'magenta',
+           # log = 'y',
+           xlab = 'wavelength (nm)',
+           ylab = 'intensity (micro mol/m2/s)',
+           main = 'Simplified stimuli')
+       lines(x = wl,
+           y = Gbright,
+           col = 'green3')       
+       # lines(x = wl,
+       #     y = Gdim,
+       #     col = 'darkgreen')
+       # lines(x = wl,
+       #     y = UVdim,
+       #     col = 'purple')
+       polygon(x = c(wl, rev(wl)),
+           y = c(Gdim, rep(0, times = length(wl))),
+           col = 'darkgreen',
+           bg = adjustcolor('darkgreen', alpha.f = 0.7))
+       polygon(x = c(wl, rev(wl)),
+           y = c(UVdim, rep(0, times = length(wl))),
+           col = 'purple',
+           bg = adjustcolor('purple', alpha.f = 0.7))
+     }
+     )
+```
+
+### Simulate quantum catches
+
+```{r simulate-catch}
+qcatches = vismodel(
+  rspecdata = LED_rspec, # Wavelengths + emission intensities
+  visual = "apis",              # Honeybee trichromatic photoreceptors
+  achromatic = "l",             # Use Green receptor for brightness contrast
+  illum = "ideal",              # These are emission spectra not reflectances
+  bkg = "ideal",                # Flat baseline (dark room)
+  vonkries = FALSE,             # Turn off adaptation; no background light exists
+  relative = FALSE               # Estimate absolute catches
+)
+# Project catches into the 2D space
+bee_space = colspace(vismodeldata = qcatches)#use default colour space
+
+# Calculate chromatic and achromatic distances between all stimuli
+percept_distances = coldist(bee_space,
+                            noise = "quantum")#minimal neural noise under dark conditions
+
+# Inspect the distance matrix
+print(percept_distances, digits = 3)
+
+#increase quantum catch for JND comparison (too dark)
+qcatches_brighter = vismodel(
+  rspecdata = LED_rspec,# Wavelengths + emission intensities
+  visual = "apis",              # Honeybee trichromatic photoreceptors
+  achromatic = "l",             # Use Green receptor for brightness contrast
+  illum = "ideal",              # These are emission spectra not reflectances
+  bkg = 0,                # Surrounding environment absorbs all light
+  vonkries = FALSE,             # Turn off adaptation; no background light exists
+  relative = FALSE,# Estimate absolute catches
+  scale = 1e6 # rescale to avoid log-error
+)
+
+bee_space_brighter = colspace(vismodeldata = qcatches_brighter)
+
+# Calculate both chromatic and achromatic distances using receptor noise
+bee_jnd = coldist(
+  qcatches_brighter, # Pass the VISMODEL object, NOT the colspace object
+  noise = "quantum",         # Dynamic photon-shot noise 
+  achromatic = TRUE,         #  calculate dL
+  n = c(1, 2, 6),            # Honeybee photoreceptor ratios (UV, Blue, Green)
+  weber = 0.05, # Chromatic Weber (Osorio & Vorobyev)
+  weber.achro = 0.1          # Achromatic Weber fraction for the green channel (Hempel de Ibarra et al., https://doi.org/10.1007/s003590100192)
+)
+
+# Print Just noticeable distances
+print(bee_jnd, digits = 3)
+```
+
+
+### Plot stimuli
+
+```{r colour_space_stimuli}
+
+
+#plot colour space ----
+par(mfrow = c(1,2),
+    mar = c(0,1,0,1))
+#original scaled
+triplot(
+  bee_space, 
+  pch = 21,               # Filled circles with borders
+  labels = TRUE,
+  col = c(Gbright = 'green3',
+         Gdim = 'darkgreen',
+         UVbright = 'magenta',
+         UVdim = 'purple',
+         UVdimmer = "purple4"), 
+  bg = gray(1.0, alpha = 0.3),
+  lwd = 2,
+  cex = 1.8,              # Size of the points
+  gamut = TRUE # show possible colours
+)
+
+
+legend(
+  "topleft", 
+  legend = c("bright green",  
+             "dim green",     
+             "bright UV",
+             "dim UV",
+             "dimmer UV"), 
+  col = c(Gbright = 'green3',
+         Gdim = 'darkgreen',
+         UVbright = 'magenta',
+         UVdim = 'purple',
+         UVdimmer = "purple4"), 
+  pt.bg = gray(1.0, alpha = 0.5),
+  pch = 21, 
+  pt.cex = 1.0,
+  cex = 1.2,
+  bty = "n"               # Removes the legend border box
+)
+
+
+# plot perceived differences ----
+par(mar = c(5,5,5,0))
+with(bee_jnd,
+     {
+  plot(
+    NULL,
+    xlab = "Chromatic Distance (JND)",
+    ylab = "Achromatic Contrast (JND)",
+    main = "Perceptual Separation",
+  xlim = c(0,max(dS)+10),
+  ylim = c(0,max(dL)+5)
+  )
+# Add a threshold line at 1 JND (the theoretical limit of discrimination)
+polygon(x = c(0,1,1,0),
+        y = c(100,100,0,0),
+        col = gray(0.5, 0.2),
+        border = NA
+        )
+polygon(y = c(0,1,1,0),
+        x = c(100,100,0,0),
+        col = gray(0.5, 0.2),
+        border = NA
+        )       
+       
+points(
+  x = dS, 
+  y = dL,
+  pch = 21,
+  col = c(Gbright_Gdim =  'green',
+  Gbright_UVbright = 'green',
+  Gbright_UVdim =  'green',
+  Gbright_UVdimmer = 'green',
+  Gdim_UVbright = 'darkgreen',
+  Gdim_UVdim = 'darkgreen',
+  Gdim_UVdimmer = 'darkgreen',
+  UVbright_UVdim = 'magenta',
+  UVbright_UVdimmer = 'magenta',
+  UVdim_UVdimmer = 'purple'),
+  bg = c(Gbright_Gdim =  'darkgreen',
+  Gbright_UVbright = 'magenta',
+  Gbright_UVdim =  'purple',
+  Gbright_UVdimmer = 'purple4',
+  Gdim_UVbright = 'magenta',
+  Gdim_UVdim = 'purple',
+  Gdim_UVdimmer = 'purple4',
+  UVbright_UVdim = 'purple',
+  UVbright_UVdimmer = 'purple4',
+  UVdim_UVdimmer = 'purple4'),
+  cex = 1.5,
+  lwd = 2
+)
+
+
+
+text(
+  x = dS, 
+  y = dL, 
+  labels = paste(patch1, "vs", patch2), 
+  pos = 4, 
+  offset = 0.5, 
+  cex = 0.75, 
+  # font = 2,             # Bold text font
+  col = "grey10"
+)
+     }
+)
+
+```
+
+
+## Saturation model - WIP!
+
+```{r model-saturation}
+
+# --- PART 1: Use pavo to get the relative spectral overlap ratios ---
+# Generate standard 1-nm curves
+wl_vector <- 300:700
+uv_source    <- dcauchy(wl_vector, location = 365, scale = 10)
+green_source <- dcauchy(wl_vector, location = 528, scale = 10)
+
+stimulated_spectra <- as.rspec(data.frame(wl = wl_vector, uv_led = uv_source, green_led = green_source))
+
+# Get clean, un-normalized sensitivity weights (relative = FALSE, scale = 1)
+# This extracts the exact proportion of light each receptor type captures per wavelength
+base_weights <- vismodel(
+  rspecdata = stimulated_spectra,
+  visual = "apis", achromatic = "l", illum = "ideal", bkg = 0, vonkries = FALSE, relative = FALSE, scale = 1
+)
+
+# Extract just the UV (s), Blue (m), and Green (l) sensitivity matrix
+sens_matrix <- as.matrix(base_weights[, c("s", "m", "l")])
+
+
+# --- PART 2: Define your custom biological mV function ---
+# Modify it slightly to accept your calculated physical photon flux scaling
+PRresponse <- function(quanta, vmax = 50, k50 = 0.03 * 1e14, n_slope = 1.07) {
+  mV <- (vmax * quanta^n_slope) / (k50^n_slope + quanta^n_slope)
+  return(mV)
+}
+
+
+# --- PART 3: Simulate the Bezold–Brücke intensity sweep ---
+# We will scale a single 365nm UV LED across your experimental range
+flux_range <- 10^seq(from = 10, to = 14, length.out = 21) # photons/cm2/s
+ds_shifts  <- numeric(length(flux_range))
+
+# Calculate the millivolt baseline at your lowest intensity (10^10 photons)
+# Multiplying the flux by the sensitivity matrix distributes the photons across the channels
+phi_baseline <- flux_range[1] * sens_matrix["uv_led", ]
+mv_baseline  <- PRresponse(phi_baseline)
+
+# Standard apis RNL noise parameters
+n_ratios <- c(1, 2, 6) # UV, Blue, Green receptor abundance
+weber    <- 0.05
+e        <- sqrt(weber^2 + 1/n_ratios)
+
+# --- PART 4: Compute the JND color shift manually ---
+for(i in 1:length(flux_range)) {
+  # Calculate actual photons caught by each receptor type at this specific brightness
+  phi_current <- flux_range[i] * sens_matrix["uv_led", ]
+  
+  # CRITICAL PHYSIOLOGY STEP: Convert the photons into true millivolts using your function
+  mv_current  <- PRresponse(phi_current)
+  
+  # In visual ecology, when using real mV responses, the signal difference 
+  # is modeled as the direct subtraction of millivolts divided by noise, 
+  # bypassing pavo's log step because the Naka-Rushton curves ALREADY handle the scaling compression!
+  delta_signal <- mv_current - mv_baseline
+  
+  # Manual RNL distance formula for trichromats
+  num <- (delta_signal[2] - delta_signal[3])^2 * e[1]^2 + 
+         (delta_signal[3] - delta_signal[1])^2 * e[2]^2 + 
+         (delta_signal[1] - delta_signal[2])^2 * e[3]^2
+  den <- e[1]^2 * e[2]^2 + e[2]^2 * e[3]^2 + e[3]^2 * e[1]^2
+  
+  ds_shifts[i] <- sqrt(num / den)
+}
+
+# --- PART 5: Plot your Intensity-dependent Hue Shift ---
+plot(
+  log10(flux_range), ds_shifts,
+  type = "b", pch = 19, col = "purple",
+  xlab = "Log10 Photon Flux (photons/cm²/s)",
+  ylab = "Chromatic Distance Shift (dS in JNDs)",
+  main = "Predicted Bezold–Brücke Shift for 365nm LED"
+)
+abline(h = 1, lty = 2, col = "red", lwd = 1.5) # The 1 JND threshold line
+
 ```
