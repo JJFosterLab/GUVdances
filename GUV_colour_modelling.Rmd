@@ -181,7 +181,7 @@ uPR_uLED = predict(StavengaSpline(lambda_max = lmax_u), x = led_u + wlband)
 # integrated sensitivity
 sens_gPR_uLED = integrate.xy(gPR_uLED)
 sens_gPR_gLED = integrate.xy(gPR_gLED)
-g_rel_u = sens_gPR_uLED/sens_gPR_gLED
+g_rel_u = sens_gPR_uLED / sens_gPR_gLED
 ```
 
 ### Set Up Response Curve Data
@@ -458,7 +458,7 @@ LED_rspec_rect = within(LED_rspec,
                    )
 
 #Cauchy (typical LED emission)
-LED_rspec = within(LED_rspec,
+LED_rspec_smooth = within(LED_rspec,
                    {
                      LEDu = dcauchy(x = wl,
                                     location = led_u,
@@ -471,46 +471,55 @@ LED_rspec = within(LED_rspec,
                    }
                    )
 #convert photon flux from photons/cm2/s to micro mol/m2/s
-micromol_stim <- c(dimmer = 1.2e12, dim = 4e12, bright = 4e14) *
-                    1e4 * #cm2 -> m2
-                    1e6 / #mol -> micromol
-                    6.022e23 # Avogadro's number
+# --- STIMULUS AND EYE GEOMETRY PARAMETERS ---
+stimulus_deg <- 10.0   # Diameter of LED stimulus in degrees
+acceptance_deg <- 2.0  # Acceptance angle of a honeybee ommatidium (~1.5° - 2.5°)
 
-LED_rspec = within(LED_rspec,
-                   {
-                     UVdimmer = micromol_stim['dimmer']*
-                       LEDu#/ # at those wavelengths in the LED emission halfmax
-                       # diff(range(wlband)) #divide by width (nm)
-                     UVdim = micromol_stim['dim']*LEDu#/
-                       # diff(range(wlband))
-                     UVbright = micromol_stim['bright']*LEDu#/
-                       # diff(range(wlband))
-                     Gdim = micromol_stim['dim']*LEDg#/
-                       # diff(range(wlband))
-                     Gbright = micromol_stim['bright']*LEDg#/
-                       # diff(range(wlband))
-                     rm('LEDu', 'LEDg')
-                   }
-                   )
-LED_rspec_rect = within(LED_rspec_rect,
-                   {
-                     UVdimmer = micromol_stim['dimmer']*
-                       LEDu/ # at those wavelengths in the LED emission halfmax
-                       diff(range(wlband)) #divide by width (nm)
-                     UVdim = micromol_stim['dim']*LEDu/
-                        diff(range(wlband))
-                     UVbright = micromol_stim['bright']*LEDu/
-                        diff(range(wlband))
-                     Gdim = micromol_stim['dim']*LEDg/
-                        diff(range(wlband))
-                     Gbright = micromol_stim['bright']*LEDg/
-                        diff(range(wlband))
-                     rm('LEDu', 'LEDg')
-                   }
-                   )
+# 1. Spatial dilution factor (overfilling ratio)
+# If stimulus > acceptance angle, the ommatidium only captures a slice of the beam
+spatial_factor <- (min(acceptance_deg, stimulus_deg) / stimulus_deg)^2  # = 0.04 for 10° stimulus
+
+# 2. Corneal facet area (m2) for a ~20 µm diameter facet
+facet_radius_m <- 10e-6
+facet_area_m2  <- pi * (facet_radius_m)^2 # ~3.14e-10 m2
+
+# Combine into a single scaling multiplier for flux per ommatidium
+# (If passing directly to pavo, spatial_factor is the primary spatial correction)
+scale_factor <- spatial_factor
+
+# --- APPLY SCALING TO YOUR SPECTRUM DATA ---
+
+micromol_stim <- c(dimmer = 1.2e12, dim = 4e12, bright = 4e14) *
+                 1e4 *       # cm2 -> m2
+                 1e6 /       # mol -> micromol
+                 6.022e23    # Avogadro's number
+
+# Apply spatial scaling directly when creating the rspec columns
+LED_rspec_smooth = within(LED_rspec_smooth, {
+  UVdimmer = (micromol_stim['dimmer'] * scale_factor) * LEDu
+  UVdim    = (micromol_stim['dim']    * scale_factor) * LEDu
+  UVbright = (micromol_stim['bright'] * scale_factor) * LEDu
+  Gdim     = (micromol_stim['dim']    * scale_factor) * LEDg
+  Gbright  = (micromol_stim['bright'] * scale_factor) * LEDg
+  rm('LEDu', 'LEDg')
+})
+
+LED_rspec_rect = within(LED_rspec_rect, {
+  bandwidth = diff(range(wlband))
+  UVdimmer = (micromol_stim['dimmer'] * scale_factor) * LEDu / bandwidth
+  UVdim    = (micromol_stim['dim']    * scale_factor) * LEDu / bandwidth
+  UVbright = (micromol_stim['bright'] * scale_factor) * LEDu / bandwidth
+  Gdim     = (micromol_stim['dim']    * scale_factor) * LEDg / bandwidth
+  Gbright  = (micromol_stim['bright'] * scale_factor) * LEDg / bandwidth
+  rm('LEDu', 'LEDg', 'bandwidth')
+})
+
+# Convert to standard pavo rspec format
+LED_rspec_smooth <- as.rspec(LED_rspec_smooth)
+LED_rspec_rect   <- as.rspec(LED_rspec_rect)
 
 # Open a blank frame wrapper with explicit limits 
-vls = unlist(c(LED_rspec[-1], LED_rspec_rect[-1]))
+vls = unlist(c(LED_rspec_smooth[-1], LED_rspec_rect[-1]))
 mn = min(vls[vls>0])
 plot(
   x = NULL, 
@@ -524,7 +533,7 @@ plot(
   main = 'Simplified Stimuli Profiles'
 )
 #Smooth LEDs
-with(LED_rspec, {
+with(LED_rspec_smooth, {
   # Bright Cauchy Profiles
   polygon(
     x = c(wl, rev(wl)),
@@ -593,51 +602,72 @@ with(LED_rspec_rect, {
 • Checks: pass vismodel object (not colspace) to coldist when required; if you see log-scale errors, adjust `scale` or `bkg`; confirm `relative`/`vonkries` choices match experiment.
 
 ```{r simulate-catch}
-qcatches = vismodel(
-  rspecdata = LED_rspec, # Wavelengths + emission intensities
+
+sky_spectrum = sensdata(illum = "bluesky")
+sky_spectrum = within(sky_spectrum,
+                     {
+                      bluesky_mol = 1e14*bluesky/#multiply by flux of a dim blue sky
+                        sum(bluesky)* #divide by integral
+                 1e4 *       # cm2 -> m2
+                 1e6 /       # mol -> micromol
+                 6.022e23    # Avogadro's number
+                     }
+                     )
+
+shade_spectrum = sensdata(illum = "forestshade")
+shade_spectrum = within(shade_spectrum,
+                     {
+                      forestshade_mol = 3e12*forestshade* #multiply by flux of a dim blue sky
+                 1e4 *       # cm2 -> m2
+                 1e6 /       # mol -> micromol
+                 6.022e23    # Avogadro's number
+                     }
+                     )
+
+qcatches_dark = vismodel(
+  rspecdata = LED_rspec_rect, # Wavelengths + emission intensities
   visual = "apis",              # Honeybee trichromatic photoreceptors
+  qcatch = "Ei",           #Colour-opponent coding model requires hyperbolic photoreceptor responses
   achromatic = "l",             # Use Green receptor for brightness contrast
   illum = "ideal",              # These are emission spectra not reflectances
-  bkg = "ideal",                # Flat baseline (dark room)
-  vonkries = FALSE,             # Turn off adaptation; no background light exists
+  bkg = shade_spectrum[,'forestshade_mol'],           # The photoreceptors are adapted to shade
+  vonkries = TRUE,             # Ideally we would turn off adaptation; no background light exists
   relative = FALSE               # Estimate absolute catches
 )
-# Project catches into the 2D space
-bee_space = colspace(vismodeldata = qcatches)#use default colour space
 
-# Calculate chromatic and achromatic distances between all stimuli
-percept_distances = coldist(bee_space,
-                            noise = "quantum")#minimal neural noise under dark conditions
-
-# Inspect the distance matrix
-print(percept_distances, digits = 3)
-
-#increase quantum catch for JND comparison (too dark)
-qcatches_brighter = vismodel(
-  rspecdata = LED_rspec,# Wavelengths + emission intensities
+qcatches_light = vismodel(
+  rspecdata = LED_rspec_rect, # Wavelengths + emission intensities
   visual = "apis",              # Honeybee trichromatic photoreceptors
+  qcatch = "Ei",           #Colour-opponent coding model requires hyperbolic photoreceptor responses
   achromatic = "l",             # Use Green receptor for brightness contrast
   illum = "ideal",              # These are emission spectra not reflectances
-  bkg = 0,                # Surrounding environment absorbs all light
-  vonkries = FALSE,             # Turn off adaptation; no background light exists
-  relative = FALSE,# Estimate absolute catches
-  scale = 1e6 # rescale to avoid log-error
+  bkg = sky_spectrum[,'bluesky_mol'],           # The photoreceptors are adapted to blue sky
+  vonkries = TRUE,             # Necessary for COC model
+  relative = FALSE               # Estimate absolute catches
 )
 
-bee_space_brighter = colspace(vismodeldata = qcatches_brighter)
+# Project catches into the 2D space
+bee_space_dark = colspace(vismodeldata = qcatches_dark,
+                     space = "coc")#Backhaus Colour-opponent coding
+bee_space_light = colspace(vismodeldata = qcatches_light,
+                     space = 'coc')#Backhaus Colour-opponent coding
 
-# Calculate both chromatic and achromatic distances using receptor noise
-bee_jnd = coldist(
-  qcatches_brighter, # Pass the VISMODEL object, NOT the colspace object
-  noise = "quantum",         # Dynamic photon-shot noise 
-  achromatic = TRUE,         #  calculate dL
-  n = c(1, 2, 6),            # Honeybee photoreceptor ratios (UV, Blue, Green)
-  weber = 0.05, # Chromatic Weber (Osorio & Vorobyev)
-  weber.achro = 0.1          # Achromatic Weber fraction for the green channel (Hempel de Ibarra et al., https://doi.org/10.1007/s003590100192)
-)
+# Calculate chromatic and achromatic distances between all stimuli
+percept_distances_dark = coldist(bee_space_dark,
+                            noise = "quantum")#minimal neural noise under dark conditions
+percept_distances_light = coldist(bee_space_light,
+                            noise = "quantum")#minimal neural noise
 
-# Print Just noticeable distances
-print(bee_jnd, digits = 3)
+# Inspect the colour shift for UV
+uv_rows = with(percept_distances_light,
+               grepl(pattern = 'UV', x = patch1) &
+              grepl(pattern = 'UV', x = patch2) )
+
+print(percept_distances_dark[uv_rows,-4],
+      digits = 3)
+print(percept_distances_light[uv_rows,-4],
+      digits = 3)
+     
 ```
 
 
@@ -654,8 +684,10 @@ print(bee_jnd, digits = 3)
 par(mfrow = c(1,2),
     mar = c(0,1,0,1))
 #original scaled
-triplot(
-  bee_space, 
+cocplot(
+  bee_space_dark, 
+  xlim = c(-1,1)*3,
+  ylim = c(-1,1)*3,
   pch = 21,               # Filled circles with borders
   labels = TRUE,
   col = c(Gbright = 'green3',
@@ -665,8 +697,24 @@ triplot(
          UVdimmer = "magenta4"), 
   bg = gray(1.0, alpha = 0.3),
   lwd = 2,
-  cex = 1.8,              # Size of the points
-  gamut = TRUE # show possible colours
+  cex = 1.8              # Size of the points
+)
+
+#original scaled
+cocplot(
+  bee_space_light,
+  xlim = c(-1,1)*3,
+  ylim = c(-1,1)*3,
+  pch = 21,               # Filled circles with borders
+  labels = TRUE,
+  col = c(Gbright = 'green3',
+         Gdim = 'darkgreen',
+         UVbright = 'magenta',
+         UVdim = 'purple',
+         UVdimmer = "magenta4"), 
+  bg = gray(1.0, alpha = 0.3),
+  lwd = 2,
+  cex = 1.8              # Size of the points
 )
 
 
@@ -689,74 +737,6 @@ legend(
   bty = "n"               # Removes the legend border box
 )
 
-
-# plot perceived differences ----
-par(mar = c(5,5,5,0))
-with(bee_jnd,
-     {
-  plot(
-    NULL,
-    xlab = "Chromatic Distance (JND)",
-    ylab = "Achromatic Contrast (JND)",
-    main = "Perceptual Separation",
-  xlim = c(0,max(dS)+10),
-  ylim = c(0,max(dL)+5)
-  )
-# Add a threshold line at 1 JND (the theoretical limit of discrimination)
-polygon(x = c(0,1,1,0),
-        y = c(100,100,0,0),
-        col = gray(0.5, 0.2),
-        border = NA
-        )
-polygon(y = c(0,1,1,0),
-        x = c(100,100,0,0),
-        col = gray(0.5, 0.2),
-        border = NA
-        )       
-       
-points(
-  x = dS, 
-  y = dL,
-  pch = 21,
-  col = c(Gbright_Gdim =  'green',
-  Gbright_UVbright = 'green',
-  Gbright_UVdim =  'green',
-  Gbright_UVdimmer = 'green',
-  Gdim_UVbright = 'darkgreen',
-  Gdim_UVdim = 'darkgreen',
-  Gdim_UVdimmer = 'darkgreen',
-  UVbright_UVdim = 'magenta',
-  UVbright_UVdimmer = 'magenta',
-  UVdim_UVdimmer = 'purple'),
-  bg = c(Gbright_Gdim =  'darkgreen',
-  Gbright_UVbright = 'magenta',
-  Gbright_UVdim =  'purple',
-  Gbright_UVdimmer = 'magenta4',
-  Gdim_UVbright = 'magenta',
-  Gdim_UVdim = 'purple',
-  Gdim_UVdimmer = 'magenta4',
-  UVbright_UVdim = 'purple',
-  UVbright_UVdimmer = 'magenta4',
-  UVdim_UVdimmer = 'magenta4'),
-  cex = 1.5,
-  lwd = 2
-)
-
-
-
-text(
-  x = dS, 
-  y = dL, 
-  labels = paste(patch1, "vs", patch2), 
-  pos = 4, 
-  offset = 0.5, 
-  cex = 0.75, 
-  # font = 2,             # Bold text font
-  col = "grey10"
-)
-     }
-)
-
 ```
 
 
@@ -770,9 +750,17 @@ text(
 ```{r model-saturation}
 
 # --- Use pavo to get the relative spectral overlap ratios ---
-
-stimulated_spectra = as.rspec(LED_rspec[c('wl','UVdimmer')])
-
+stimulated_spectra = LED_rspec_rect[c('wl','UVdimmer')]
+stimulated_spectra = as.rspec(within(stimulated_spectra, {
+  UVdimmer = UVdimmer / #convert back to photon flux
+    (
+      1e4 *       # cm2 -> m2
+        1e6 /       # mol -> micromol
+        6.022e23    # Avogadro's number)]
+    )
+  #normalise
+  UVdimmer = UVdimmer/sum(UVdimmer)
+}))
 # Get clean, un-normalized sensitivity weights (relative = FALSE, scale = 1)
 # This extracts the exact proportion of light each receptor type captures per wavelength
 base_weights = vismodel(
@@ -798,45 +786,53 @@ flux_range = 10^seq(from = 10,
                     to = 15,
                     length.out = 1e3) # photons/cm2/s
 ds_shifts = numeric(length(flux_range))
+ds_saturation = numeric(length(flux_range))
+greenness = numeric(length(flux_range))  # Relative L-channel contribution
 
 # Calculate the millivolt baseline at your lowest intensity (10^10 photons)
 # Multiplying the flux by the sensitivity matrix distributes the photons across the channels
-phi_baseline = flux_range[1] * sens_matrix["UVdimmer", ]
-mv_baseline = PRresponse(phi_baseline)
+# --- PART 4: Compute the JND color shift correctly ---
 
-# Standard Apis RNL noise parameters
-n_ratios  = c(1, 2, 6) # UV, Blue, Green receptor abundance
-weber    =  0.05
-e_param  = sqrt(weber^2 + 1/n_ratios)
+# 1. Baseline chromatic signal (isolated from overall luminance)
+phi_baseline = flux_range[1] * sens_matrix["UVdimmer", ]# * flux_to_ommatidium
+mv_baseline  = PRresponse(phi_baseline)
+chrom_baseline = mv_baseline - mean(mv_baseline) # Isolate pure baseline hue
 
-# --- PART 4: Compute the JND color shift manually ---
 for(i in 1:length(flux_range)) {
-  # Calculate actual photons caught by each receptor type at this specific brightness
-  phi_current = flux_range[i] * sens_matrix["UVdimmer", ]
+  phi_current = flux_range[i] * sens_matrix["UVdimmer", ] #* flux_to_ommatidium
+  mv_current  = PRresponse(phi_current) # [V_s, V_m, V_l]
   
-  # CRITICAL PHYSIOLOGY STEP: Convert the photons into true millivolts using your function
-  mv_current = PRresponse(phi_current)
+  # 2. Isolate pure current hue by removing mean luminance
+  mean_mv = mean(mv_current)
+  chrom_signal = mv_current - mean_mv
   
-  # In visual ecology, when using real mV responses, the signal difference 
-  # is modeled as the direct subtraction of millivolts divided by noise, 
-  # bypassing pavo's log step because the Naka-Rushton curves ALREADY handle the scaling compression!
-  delta_signal = mv_current - mv_baseline
+  # 3. Chromatic shift is the difference between the 
+  # MEAN-SUBTRACTED signals (Current Hue vs Baseline Hue)
+  delta_chrom = chrom_signal - chrom_baseline
   
-  # Manual RNL distance formula for trichromats
-  num_param <- (delta_signal[2] - delta_signal[3])^2 *
-    e_param[1]^2 +
-    (delta_signal[3] - delta_signal[1])^2 * e_param[2]^2 +
-    (delta_signal[1] - delta_signal[2])^2 * e_param[3]^2
+  # Ratio of L-voltage relative to overall voltage response across all channels
+  greenness[i]  =  mv_current["l"] / sum(mv_current)
   
-  den_param <- e_param[1]^2 *
-    e_param[2]^2 +
-    e_param[2]^2 * e_param[3]^2 +
-    e_param[3]^2 * e_param[1]^2
+  # 4. Manual RNL distance formula for pure HUE SHIFT (Bezold-Brücke)
+  delta_num_param <- (delta_chrom[2] - delta_chrom[3])^2 * e_param[1]^2 +
+                     (delta_chrom[3] - delta_chrom[1])^2 * e_param[2]^2 +
+                     (delta_chrom[1] - delta_chrom[2])^2 * e_param[3]^2
   
-  ds_shifts[i] <- sqrt(num_param / den_param)
+  # RNL Chromatic Saturation (Distance from origin/achromatic point)
+  num_param <- (chrom_signal[2] - chrom_signal[3])^2 * e_param[1]^2 +
+               (chrom_signal[3] - chrom_signal[1])^2 * e_param[2]^2 +
+               (chrom_signal[1] - chrom_signal[2])^2 * e_param[3]^2
+               
+  den_param <- e_param[1]^2 * e_param[2]^2 +
+               e_param[2]^2 * e_param[3]^2 +
+               e_param[3]^2 * e_param[1]^2
+               
+  ds_shifts[i]     <- sqrt(delta_num_param / den_param)
+  ds_saturation[i] <- sqrt(num_param / den_param)
 }
 
-# --- Plot your Intensity-dependent Hue Shift ---
+par(mfrow = c(1,2))
+# --- Plot Intensity-dependent Hue Shift ---
 plot(
   x = NULL,
   log = 'x',
@@ -844,7 +840,7 @@ plot(
   xlab = "UV intensity (photons/cm2/s)",
   ylab = "Chromatic Distance Shift (JND)",
   main = "Predicted Bezold–Brücke Shift for 365nm LED",
-  ylim = c(0,1)*2,
+  ylim = c(0,1)*25,
   xlim = range(flux_range)
 )
 abline(h = 0)
@@ -863,5 +859,41 @@ lines(x = flux_range,
 abline(v = c(1.2e12, 4e12, 4e14),
        col = c('magenta4', 'purple', 'magenta'),
        lwd = 2)
+# --- Plot Intensity-dependent Saturation Shift ---
+plot(
+  x = NULL,
+  log = 'x',
+  type = "l", 
+  xlab = "UV intensity (photons/cm2/s)",
+  ylab = "Distance to Achromatic Point (JND)",
+  main = "Predicted Bezold–Brücke Shift for 365nm LED",
+  ylim = c(0,1)*25,
+  xlim = range(flux_range)
+)
+abline(h = 0)
+polygon(y = c(0,1,1,0),
+        x = rev(sort(rep(range(flux_range)*c(0.1, 10),times = 2))),
+        col = gray(0.5, 0.2),
+        border = NA
+        )
+lines(x = flux_range, 
+  y = ds_saturation,
+    pch = 19,
+  col = "purple4",
+  lwd = 5
+  )
+lines(x = flux_range, 
+  y = greenness,
+    pch = 19,
+  col = "green",
+  lwd = 5
+  )
+#add LEDs
+abline(v = c(1.2e12, 4e12, 4e14),
+       col = c('magenta4', 'purple', 'magenta'),
+       lwd = 2)
 
 ```
+### Hue analysis
+
+# Standard colour model comparison
