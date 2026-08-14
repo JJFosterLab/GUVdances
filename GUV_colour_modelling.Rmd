@@ -13,7 +13,7 @@ editor_options:
     wrap: sentence
 ---
 
-## Details
+# Details
 
 > **DESCRIPTION**
 >
@@ -46,13 +46,41 @@ editor_options:
 > The Bezold-Brücke effect in the color vision system of the honeybee.
 > *Vision Res.* 32(8):1425-31. doi: 10.1016/0042-6989(92)90199-s
 
+# TODO
+- photoreceptor saturation modelling
+- default COC colour vision model
+- plot colour space COC model
+- measure hue shift default COC model
+- measure saturation shift default COC model
+- photoreceptor saturation COC model
+- plot colour space phot.sat. COC model
+- measure hue shift phot.sat. COC model
+- measure saturation shift phot.sat. COC model
+- measure greenness phot.sat. COC model
+
+# Introduction
+
+In this analysis we simulate the detection of UV and green stimuli of different 
+intensities by honeybee photoreceptors, and consequently their perceived spectral contrast 
+and colour. 
+Three distinct approaches are applied:
+
+1.
+Modelling of photoreceptor responses, based on their spectral sensitivity and 
+intensity response curve.
+
+2.
+Default COC colour modelling using `pavo`.
+
+3.
+Adjusted COC colour modelling incorporating the photoreceptor response curves.
+
+# Set up work space
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Introduction
-
-This document models photoreceptor responses and sensitivities based on the visual pigment templates described by Stavenga (2010) and physiological measurements of honeybee photoreceptors.
 
 ```{r setup_packages}
 # Package for integration of functions
@@ -62,10 +90,10 @@ require("pavo")
 ```
 
 
-## Retina-level model
+# Retina-level model
 
 
-### Photoreceptor Sensitivity
+## Photoreceptor Sensitivity
 
 We define a function, `StavengaSpline()`, to generate visual pigment template curves for invertebrates.
 It supports $A1$ pigment types and calculates the $\alpha$-, $\beta$-, and $\gamma$-absorption bands using modified lognormal models.
@@ -116,11 +144,14 @@ StavengaSpline = function(spec_range = c(300, 700), #bounds of spectrum in nanom
 ```
 
 
-### Response Function
+## Response Function
 
 We model the photoreceptor response (in mV) to light intensity (photons/cm²/s) using a Naka-Rushton-like function.
 The parameters are based on honeybee photoreceptor recordings from Kolyfetis *et al.* (2025).
 See `1Data/250327_009_Apis_MainRetina_Kolyfetis2025.pdf`.
+By default, we assume the semi-saturation points ($k_{50}$) is identical to that 
+measured during those recordings. In a typical colour model, this is adjusted to 
+the background average.
 
 ```{r photoreceptor_response}
 # Define a function for photoreceptor response
@@ -180,10 +211,11 @@ uPR_uLED = predict(StavengaSpline(lambda_max = lmax_u), x = led_u + wlband)
 # integrated sensitivity
 sens_gPR_uLED = integrate.xy(gPR_uLED)
 sens_gPR_gLED = integrate.xy(gPR_gLED)
+# spectral contrast (green-UV ratio)
 g_rel_u = sens_gPR_uLED / sens_gPR_gLED
 ```
 
-### Set Up Response Curve Data
+## Set Up Response Curve Data
 
 We define a range of UV intensities (photons/cm²/s) and compute simulated response curves for the UV and green photoreceptors under different absolute sensitivity assumptions.
 
@@ -197,7 +229,7 @@ example_u = PRresponse(k50 = 3e12, quanta = xx)
 par(mar = c(4.5,4.5,4.5,4.5))
 ```
 
-### Equal Absolute Sensitivity
+## Equal Absolute Sensitivity
 
 First, we plot simulated response curves assuming the green and UV photoreceptors have equal absolute sensitivity.
 We also compute and overlay the log ratio of green to UV photoreceptor responses.
@@ -257,7 +289,7 @@ mtext(side = 4,
       col = 'purple4')
 ```
 
-### Account for Sensitivity Difference
+## Account for Sensitivity Difference
 
 Next, we plot the response curves under a scenario where the green photoreceptor has a lower absolute sensitivity (semi-saturation constant $k_{50}$ at a higher intensity) than the UV photoreceptor.
 
@@ -315,11 +347,11 @@ mtext(side = 4,
 
 This relationship could also explain the change in perceived greenness of the bright UV stimulus, 
 but would not explain the difference between dim and dimmer UV. 
-Green receptors are also more common in the honeybee retina than UV receptors ($\approx 4.4:1$), 
+Green receptors are more common in the honeybee retina than UV receptors ($\approx 4.4:1$), 
 which may somewhat compensate for any difference in sensitivity.
 
 
-### Photoreceptor Contrast
+## Photoreceptor Contrast
 Plot the simpler example to show how the green-opsin's $\beta$ peak and saturation of the UV photoreceptor could 
 contribute to a change in perceived green-ness between our dim and bright UV stimuli.
 
@@ -433,9 +465,478 @@ mtext(side = 4,
 ```
 
 
-## Colour model
+# Colour Opponent Contrast Model
 
-### Set up stimuli
+## Sanity check 
+Reproduce the Bezold-Brücke effect reported in Backhaus 1991.
+
+### Set up functions
+
+First set up a function that calculates the COC trajectories of monochromatic lights 
+across a given range of relative intensities (measured relative to the background).
+We will also try to do this using `pavo` default functions, although these do not 
+work in precisely the same way.
+
+```{r COC-trajectory-functions}
+
+# generic function for calculating trajectories across Backhaus' x and y (A and B) 
+# for a monochromatic source
+
+calculate_coc_traj = function(target_wl, # monochromatic wavelength of interest
+                          intensity) {
+  
+   # 1. Retrieve and clean standard trichromatic apis sensitivity curves
+  apis_sens = pavo::sensdata(visual = "apis")
+  
+  # Protect against column name variations using the standard with() pattern
+  clean_sens = with(apis_sens, { 
+    data.frame(
+      wl = wl,     # Wavelengths
+      s  = apis.s, # UV channel
+      m  = apis.m, # Blue channel
+      l  = apis.l  # Green channel
+    )
+  })
+  
+  # 1. Locate the row index closest to the current target wavelength
+  target_idx = which.min(abs(clean_sens$wl - target_wl))
+  
+  # 2. Extract sensitivity weights for this wavelength slice
+  s_weight = clean_sens$s[target_idx]
+  m_weight = clean_sens$m[target_idx]
+  l_weight = clean_sens$l[target_idx]
+  
+  # 3. Compute raw intensity flux across all channels simultaneously
+  # R_s, R_m, and R_l become vectors matching the length of intensity
+  R_s = intensity * s_weight
+  R_m = intensity * m_weight
+  R_l = intensity * l_weight
+  
+  # 4. True Backhaus Hyperbolic Saturation Function (n = 1)
+  E_s = R_s / (R_s + 1)
+  E_m = R_m / (R_m + 1)
+  E_l = R_l / (R_l + 1)
+  
+  # 5. Canonical 1991/1992 Color Opponent Coding Transformations
+  x_coords = 7 * (E_l - E_m)
+  y_coords = 11 * (E_s - (E_m + E_l) / 2)
+  
+  # 6. Return a localized dataframe for this wavelength
+  track_df = data.frame(
+    wavelength = as.character(target_wl),
+    intensity  = intensity,
+    x          = x_coords,
+    y          = y_coords
+  )
+  
+  return(track_df)
+}
+
+
+
+# ==============================================================================
+# FUNCTION: GENERATE BACKHAUS BEZOLD-BRÜCKE TRAJECTORIES
+# ==============================================================================
+
+get_backhaus_trajectories = function(test_wls, #wavelengths of monochromatic light
+                                     intensity #relative intensities
+  ){
+  
+  # Generate the trajectory data for each wavelength
+  trajectory_list = lapply(
+    X               = test_wls,
+    FUN             = calculate_coc_traj,
+    intensity = intensity
+  )
+  
+  # Collapse the list of data frames into a single, master data frame
+  trajectory_data <- do.call(rbind, trajectory_list)
+    
+  return(trajectory_data)
+}
+
+
+# ==============================================================================
+# FUNCTION: GENERATE NATIVE PAVO TRAJECTORIES
+# ==============================================================================
+
+get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
+                                     intensity #relative intensities
+  ){
+  # 1. Establish the standard 300 to 700 nm wavelength backbone 
+  wl_backbone = pavo::sensdata(visual = "apis")$wl
+  
+  # 2. Build the master pavo rspec framework matrix
+  pavo_matrix = data.frame(wl = wl_backbone)
+  
+    for (target_wl in test_wls) {
+    for (i in 1:length(intensity)) {
+      col_name <- paste0("WL_", target_wl, "_Mult_", i)
+      pavo_matrix[[col_name]] <- ifelse(wl_backbone == target_wl, intensity[i], 0)
+    }
+  }
+  pavo_rspec = as.rspec(pavo_matrix)
+  
+  # 3. Define the homogeneous background vector
+  homogeneous_bkg = rep(1.0, length(wl_backbone))
+  
+  # 4. Run the native pavo vismodel pipeline
+  pavo_vis = vismodel(
+    rspecdata  = pavo_rspec,
+    visual     = "apis",
+    qcatch     = "Ei",           
+    illum      = "ideal",        
+    bkg        = homogeneous_bkg,
+    vonkries   = TRUE,           # Active automatic normalization
+    relative   = FALSE           
+  )
+  
+  # 5. Project directly into Color Opponent Coding (COC) Space
+  pavo_coc = colspace(pavo_vis, space = "coc")
+  
+  # 6. Build the matching metadata layout to map vectors back together
+  metadata = expand.grid(
+    intensity_step = 1:length(intensity), 
+    wavelength     = test_wls
+  )
+  
+  # 7. Package everything into a clean data frame matching the Backhaus layout exactly
+  trajectory_data = data.frame(
+    wavelength = as.character(metadata$wavelength),
+    intensity  = intensity[metadata$intensity_step],
+    x          = pavo_coc$x,
+    y          = pavo_coc$y
+  )
+  
+  return(trajectory_data)
+}
+
+# plotting function
+plot_coc_trajectories = function(trajectory_data, #data from get_backhaus_trajectories or get_pavo_trajectories
+                                  main_title = "Intensity-Dependent Colour Trajectories", 
+                                  line_col = c("344" = "orchid4", 
+                                                  "416" = "blue3", 
+                                                  "494" = "cyan3", 
+                                                  "532" = "darkgreen"), #needs to be named like trajectory_data$wavelength
+                                 ref_point = 100 # indicate 1st point >100x background
+                                 ) {
+  
+  # 1. Setup a generic dummy data frame structure to generate a clean pavo canvas grid
+  dummy_pavo = data.frame(s = 0, 
+                          m = 0, 
+                          l = 0, 
+                          x = c(-12, 12), 
+                          y = c(-12, 12))
+  class(dummy_pavo) = c("colspace", "coc", "data.frame")
+  
+  # 2. Render Backhaus's honeybee colour space boundary
+  pavo::cocplot(dummy_pavo, 
+                main = main_title, 
+                col = "transparent")
+  
+  # 3. Handle default fallback colors if none are provided by the user
+  unique_wls = unique(trajectory_data$wavelength)
+  
+  # 4. Map over each wavelength vector to draw its expanding trajectory line
+  for (wl_idx in unique_wls) {
+    sub_data = trajectory_data[trajectory_data$wavelength == wl_idx, ]
+    n_points = nrow(sub_data)
+    
+    # Extract specific line color for this wavelength track
+    current_col = if (wl_idx %in% names(line_col)){ line_col[wl_idx] }else{ "black" }
+    
+    # mid_idx <- round(n_points * 0.4)
+    
+    # Draw continuous expanding color vector path
+    with(sub_data,
+         {
+    lines(x = x, 
+          y = y, 
+          col = current_col, 
+          lwd = 3.5)
+    # 1st point 10x brighter than background
+    points(x = x[which(intensity > ref_point)][1],
+           y = y[which(intensity > ref_point)][1], 
+           col = "black", 
+           pch = 21, 
+           bg = current_col, 
+           cex = 1.3)
+    # Indicate final position at maximum intensity
+    points(x = x[length(x)],
+           y = y[length(y)], 
+           col = "gray75", 
+           pch = 21, 
+           bg = current_col, 
+           cex = 1.3,
+           lwd = 3)
+         }
+    )
+    
+  }
+  
+}
+
+
+```
+
+
+### Compare pavo and Backhaus versions
+
+```{r pavo-Backhaus-simulation}
+
+test_wls = c(344, 416, 494, 532)
+multipliers = 10^seq(-1, 3, length.out = 100) # 0.1x to 1000x contrast sweep
+
+  
+backhaus_traj = get_backhaus_trajectories(test_wls = test_wls,
+                                          intensity = multipliers
+                                   )  
+pavo_traj = get_pavo_trajectories(test_wls = test_wls,
+                                  intensity = multipliers
+                                   )
+#plot together
+# Split plotting grid into two window rows
+par(mfrow = c(1, 2),
+    mar = c(0,0,4,2))
+line_colours = c("344" = "orchid4",
+                "416" = "blue3", 
+                "494" = "cyan3", 
+                "532" = "darkgreen")
+
+plot_coc_trajectories(trajectory_data = backhaus_traj,
+                      main_title = "Backhaus, 1991\n(Preserves Non-Linear Hue Shifts)",
+                      line_col = line_colours
+                      )
+
+plot_coc_trajectories(trajectory_data = pavo_traj,
+                      main_title = "Pavo Version\n(Multipliers Cancel Out)",
+                      line_col = line_colours
+                      )
+
+legend(x = 'topright',
+       legend = c(paste(test_wls, 'nm'),
+                  '100x bkgd',
+                  paste0(round(max(multipliers)),'x bkgd') ),
+       col = c(line_colours,
+               'black', 'gray75'),
+       pch = c(rep(19,length(test_wls)),
+               21, 21),
+       bty = 'n')
+
+```
+
+For the Backhaus version, the trajectories initially move away from the origin, 
+and then turn back close to $10^3 \times$ background for blue and UV light. 
+In the `pavo` version, these nonlinearities do not occur.
+
+We can also plot the chroma saturation and realtive green-ness for the UV light in each.
+```{r saturation-Backhaus}
+backhaus_traj = within(backhaus_traj,
+                       {
+                       saturation = sqrt(x^2+y^2) #distance from neutral hue
+                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
+                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
+                       }
+                       )
+pavo_traj = within(pavo_traj,
+                       {
+                       saturation = sqrt(x^2+y^2) #distance from neutral hue
+                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
+                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
+                       }
+                       )
+par(mfrow = c(2,2),
+    mar = c(4,4,2,0))
+plt_expr =      expression({
+      plot(x = intensity,
+           y = saturation,
+           type = 'l',
+           log = 'x',
+           ylim = c(0,sqrt(12*2)),
+           col = 'orange',
+           lwd = 3)
+       abline(h = c(0,1)*sqrt(12*2))
+       plot(x = intensity,
+           y = greenness,
+           type = 'l',
+           log = 'x',
+           ylim = c(0,1),
+           ylab = 'strength green | UV',
+           col = 'green',
+           lwd = 3)       
+       lines(x = intensity,
+           y = uvness,
+           col = 'magenta',
+           lwd = 3)
+        abline(h = c(0,0.5,1))
+})
+
+with(subset(backhaus_traj,
+            wavelength <400),
+     eval(plt_expr)
+)
+mtext(text = 'Backhaus COC')
+
+with(subset(pavo_traj,
+            wavelength <400),
+      eval(plt_expr)
+)
+mtext(text = 'Pavo COC')
+
+```
+
+Here we can see the drop in UV saturation at high intensities for the Backhaus version, 
+but no perceptual shift towards green (greenness > 0.5). 
+For `pavo` hue remains stable and increases in saturation with intensity.
+
+
+## Backhaus Model LEDs
+
+Assuming minimal reflections from the experimental room, the LEDs could plausibly be 
+3–5 log units brighter than the background. Assuming the bees are instead adapted 
+to a bright afternoon sky, that range would be closer to -1.0 to 2.0 (see below).
+
+```{r Backhaus-LEDs-dark-adapted}
+
+study_wls = c(led_u, led_g)
+study_multipliers = 10^seq(-2, 5, length.out = 100) # 0.01x to 100000x contrast sweep
+
+  
+study_traj = get_backhaus_trajectories(test_wls = study_wls,
+                                          intensity = study_multipliers
+                                   )
+
+#add saturation and greenness
+study_traj = within(study_traj,
+                       {
+                       saturation = sqrt(x^2+y^2) #distance from neutral hue
+                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
+                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
+                       }
+                       )
+#when does chromatic saturation peak?
+print(
+  log10(
+with(subset(study_traj, wavelength < 400),
+     intensity[which(saturation == max(saturation))])
+),
+digits = 2
+)
+#plot together
+# Split plotting grid into two window rows
+par(mfrow = c(1, 3),
+    mar = c(0,0,4,2))
+study_colours = c('magenta',
+                'green')
+names(study_colours) = study_wls
+
+plot_coc_trajectories(trajectory_data = study_traj,
+                      main_title = "Green and UV LEDs\nfrom dimmer to bright",
+                      line_col = study_colours,
+                      ref_point = 1e2
+                      )
+
+
+legend(x = 'topright',
+       legend = c(paste(study_wls, 'nm'),
+                  '100x bkgd',
+                  paste0(round(max(study_multipliers)),'x bkgd') ),
+       col = c(study_colours,
+               'black', 'gray75'),
+       pch = c(rep(19,length(study_wls)),
+               21, 21),
+       bty = 'n')
+
+par(mar = c(4,4,2,0))
+with(subset(study_traj,
+            wavelength <400),
+     eval(plt_expr)
+)
+
+```
+
+Here we do indeed observe a drop in UV saturation above $2.5 \cdot 10^2 \times$ background. 
+At higher intensities, both the UV and green LEDs approach the "blue" quadrant 
+in the negative *A* and *B* directions as the responses of the other photoreceptors 
+(blue and green for UV; blue and UV for green) grow more rapidly than the saturated 
+target receptor. Nonetheless, these trajectories curve back towards the $(0,0)$ 
+achromatic point before crossing the *A* or *B* axes, as all photoreceptors 
+approach saturation. This occurs at lower intensities for the UV LED, which also 
+stimulates the $\beta$ peak of the other two receptors. 
+
+We could also assume light adaptation to a mid-afternoon blue sky with a total 
+radiance of around $10^14$ photons/cm²/s.
+
+
+
+```{r Backhaus-LEDs-light-adapted}
+
+sky_spectrum = within(sensdata(illum = "bluesky"),
+                      {bluesky = bluesky*1e14}
+)
+
+sky_spline = with(sky_spectrum, 
+                  smooth.spline(wl, bluesky) )
+
+led_sky_uv = predict(sky_spline, x = study_wls[1])$y # photon flux at wavelength of interest
+#N.B. this is similar for the green channel
+# 7.6e+13 vs 7.1e+13
+
+light_set = c(dimmer = 1.2e12, dim = 4e12, bright = 4e14)/led_sky_uv
+
+light_multipliers = 10^round(range(log10(light_set)))
+
+  
+light_traj = get_backhaus_trajectories(test_wls = study_wls,
+                                          intensity = light_multipliers
+                                   )
+
+#add saturation and greenness
+light_traj = within(light_traj,
+                       {
+                       saturation = sqrt(x^2+y^2) #distance from neutral hue
+                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
+                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
+                       }
+                       )
+
+#plot together
+# Split plotting grid into two window rows
+par(mfrow = c(1, 3),
+    mar = c(0,0,4,2))
+study_colours = c('magenta',
+                'green')
+names(study_colours) = study_wls
+
+plot_coc_trajectories(trajectory_data = light_traj,
+                      main_title = "Green and UV LEDs\nfrom dimmer to bright",
+                      line_col = study_colours,
+                      ref_point = light_set[2]
+                      )
+
+
+legend(x = 'topright',
+       legend = c(paste(study_wls, 'nm'),
+                  'dim',
+                  'bright'),
+       col = c(study_colours,
+               'black', 'gray75'),
+       pch = c(rep(19,length(study_wls)),
+               21, 21),
+       bty = 'n')
+
+par(mar = c(4,4,2,0))
+with(subset(light_traj,
+            wavelength <400),
+     eval(plt_expr)
+)
+
+```
+
+In the light adapted situation, no Bezold-Brücke effect occurs. Instead increases 
+in intensity result in increases in chromatic saturation paired with stable colour strength.
+
+## Set up stimuli
 
 Here we construct our LED spectra as `rspec`` format spectra in µmol/m²/s, 
 by converting from cm$^2$ to m$^2$ and photons to moles, multiplying by $10^6$ to get µmol.
@@ -1010,7 +1511,7 @@ coc_trajectory <- data.frame(
 class(coc_trajectory) <- c("colspace", "coc", "data.frame")
 
 # 2. Open a fresh plotting canvas
-# pavo::cocplot builds the traditional bee hexagon boundary template
+# pavo::cocplot builds the traditional bee template
 pavo::cocplot(coc_trajectory, 
               main = "Intensity-dependent Bezold-Brücke Trajectory",
               col = "transparent") # Keeps points hidden initially to avoid clutter
