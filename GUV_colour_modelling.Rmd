@@ -479,89 +479,9 @@ work in precisely the same way.
 
 ```{r COC-trajectory-functions}
 
-# generic function for calculating trajectories across Backhaus' x and y (A and B) 
-# for a monochromatic source
-
-calculate_coc_traj = function(target_wl, # monochromatic wavelength of interest
-                          intensity) {
-  
-   # 1. Retrieve and clean standard trichromatic apis sensitivity curves
-  apis_sens = pavo::sensdata(visual = "apis")
-  
-  # Protect against column name variations using the standard with() pattern
-  clean_sens = with(apis_sens, { 
-    data.frame(
-      wl = wl,     # Wavelengths
-      s  = apis.s, # UV channel
-      m  = apis.m, # Blue channel
-      l  = apis.l  # Green channel
-    )
-  })
-  
-  # 1. Locate the row index closest to the current target wavelength
-  target_idx = which.min(abs(clean_sens$wl - target_wl))
-  
-  # 2. Extract sensitivity weights for this wavelength slice
-  s_weight = clean_sens$s[target_idx]
-  m_weight = clean_sens$m[target_idx]
-  l_weight = clean_sens$l[target_idx]
-  
-  # 3. Compute raw intensity flux across all channels simultaneously
-  # R_s, R_m, and R_l become vectors matching the length of intensity
-  R_s = intensity * s_weight
-  R_m = intensity * m_weight
-  R_l = intensity * l_weight
-  
-  # 4. True Backhaus Hyperbolic Saturation Function (n = 1)
-  E_s = R_s / (R_s + 1)
-  E_m = R_m / (R_m + 1)
-  E_l = R_l / (R_l + 1)
-  
-  # 5. Canonical 1991/1992 Color Opponent Coding Transformations
-  x_coords = 7 * (E_l - E_m)
-  y_coords = 11 * (E_s - (E_m + E_l) / 2)
-  
-  # 6. Return a localized dataframe for this wavelength
-  track_df = data.frame(
-    wavelength = as.character(target_wl),
-    intensity  = intensity,
-    x          = x_coords,
-    y          = y_coords
-  )
-  
-  return(track_df)
-}
-
-
-
-# ==============================================================================
-# FUNCTION: GENERATE BACKHAUS BEZOLD-BRÜCKE TRAJECTORIES
-# ==============================================================================
-
-get_backhaus_trajectories = function(test_wls, #wavelengths of monochromatic light
-                                     intensity #relative intensities
-  ){
-  
-  # Generate the trajectory data for each wavelength
-  trajectory_list = lapply(
-    X               = test_wls,
-    FUN             = calculate_coc_traj,
-    intensity = intensity
-  )
-  
-  # Collapse the list of data frames into a single, master data frame
-  trajectory_data <- do.call(rbind, trajectory_list)
-    
-  return(trajectory_data)
-}
-
-
-# ==============================================================================
-# FUNCTION: GENERATE NATIVE PAVO TRAJECTORIES
-# ==============================================================================
 
 get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
-                                     intensity #relative intensities
+                                 intensity #relative intensities
   ){
   # 1. Establish the standard 300 to 700 nm wavelength backbone 
   wl_backbone = pavo::sensdata(visual = "apis")$wl
@@ -571,14 +491,17 @@ get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
   
     for (target_wl in test_wls) {
     for (i in 1:length(intensity)) {
-      col_name <- paste0("WL_", target_wl, "_Mult_", i)
-      pavo_matrix[[col_name]] <- ifelse(wl_backbone == target_wl, intensity[i], 0)
+      col_name = paste0("WL_", target_wl, "_Mult_", i)
+      pavo_matrix[[col_name]] = ifelse(wl_backbone == target_wl,
+                                        yes =  intensity[i],
+                                        no =  0)
     }
   }
   pavo_rspec = as.rspec(pavo_matrix)
   
   # 3. Define the homogeneous background vector
-  homogeneous_bkg = rep(1.0, length(wl_backbone))
+  homogeneous_bkg = rep(x = 1.0/length(wl_backbone), #adds to 1.0
+                        times = length(wl_backbone))
   
   # 4. Run the native pavo vismodel pipeline
   pavo_vis = vismodel(
@@ -592,7 +515,8 @@ get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
   )
   
   # 5. Project directly into Color Opponent Coding (COC) Space
-  pavo_coc = colspace(pavo_vis, space = "coc")
+  pavo_coc = colspace(vismodeldata = pavo_vis, 
+                      space = "coc")
   
   # 6. Build the matching metadata layout to map vectors back together
   metadata = expand.grid(
@@ -605,7 +529,11 @@ get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
     wavelength = as.character(metadata$wavelength),
     intensity  = intensity[metadata$intensity_step],
     x          = pavo_coc$x,
-    y          = pavo_coc$y
+    y          = pavo_coc$y,
+    chroma = with(pavo_coc, sqrt(x^2 + y^2)), 
+    uv = pavo_vis$s, #save the photoreceptor responses
+    bl = pavo_vis$m,
+    gr = pavo_vis$l
   )
   
   return(trajectory_data)
@@ -621,7 +549,7 @@ plot_coc_trajectories = function(trajectory_data, #data from get_backhaus_trajec
                                  ref_point = 100 # indicate 1st point >100x background
                                  ) {
   
-  # 1. Setup a generic dummy data frame structure to generate a clean pavo canvas grid
+  # 1dummy data frame structure for pavo canvas grid
   dummy_pavo = data.frame(s = 0, 
                           m = 0, 
                           l = 0, 
@@ -629,26 +557,22 @@ plot_coc_trajectories = function(trajectory_data, #data from get_backhaus_trajec
                           y = c(-12, 12))
   class(dummy_pavo) = c("colspace", "coc", "data.frame")
   
-  # 2. Render Backhaus's honeybee colour space boundary
+  # Open colour opponent contrast plot
   pavo::cocplot(dummy_pavo, 
                 main = main_title, 
                 col = "transparent")
   
-  # 3. Handle default fallback colors if none are provided by the user
+  # Identify wavelengths
   unique_wls = unique(trajectory_data$wavelength)
   
-  # 4. Map over each wavelength vector to draw its expanding trajectory line
+  # Map over each wavelength vector to draw its expanding trajectory line
   for (wl_idx in unique_wls) {
-    sub_data = trajectory_data[trajectory_data$wavelength == wl_idx, ]
-    n_points = nrow(sub_data)
-    
     # Extract specific line color for this wavelength track
     current_col = if (wl_idx %in% names(line_col)){ line_col[wl_idx] }else{ "black" }
     
-    # mid_idx <- round(n_points * 0.4)
     
     # Draw continuous expanding color vector path
-    with(sub_data,
+    with(trajectory_data[trajectory_data$wavelength == wl_idx, ],
          {
     lines(x = x, 
           y = y, 
@@ -688,32 +612,25 @@ test_wls = c(344, 416, 494, 532)
 multipliers = 10^seq(-1, 3, length.out = 100) # 0.1x to 1000x contrast sweep
 
   
-backhaus_traj = get_backhaus_trajectories(test_wls = test_wls,
-                                          intensity = multipliers
-                                   )  
 pavo_traj = get_pavo_trajectories(test_wls = test_wls,
                                   intensity = multipliers
                                    )
+
 #plot together
 # Split plotting grid into two window rows
-par(mfrow = c(1, 2),
+par(mfrow = c(1, 1),
     mar = c(0,0,4,2))
 line_colours = c("344" = "orchid4",
                 "416" = "blue3", 
                 "494" = "cyan3", 
                 "532" = "darkgreen")
 
-plot_coc_trajectories(trajectory_data = backhaus_traj,
-                      main_title = "Backhaus, 1991\n(Preserves Non-Linear Hue Shifts)",
-                      line_col = line_colours
-                      )
-
 plot_coc_trajectories(trajectory_data = pavo_traj,
-                      main_title = "Pavo Version\n(Multipliers Cancel Out)",
+                      main_title = "Colour Opponent Contrast\n(Increasing Photon Flux)",
                       line_col = line_colours
                       )
 
-legend(x = 'topright',
+legend(x = 'topleft',
        legend = c(paste(test_wls, 'nm'),
                   '100x bkgd',
                   paste0(round(max(multipliers)),'x bkgd') ),
@@ -723,72 +640,55 @@ legend(x = 'topright',
                21, 21),
        bty = 'n')
 
+
+
 ```
 
-For the Backhaus version, the trajectories initially move away from the origin, 
-and then turn back close to $10^3 \times$ background for blue and UV light. 
-In the `pavo` version, these nonlinearities do not occur.
+The trajectories initially move away from the origin, 
+and then turn back close to $10^2 \times$ background for blue and UV light. 
 
-We can also plot the chroma saturation and realtive green-ness for the UV light in each.
+We can also plot the chroma saturation and relative photoreceptor responses for each.
 ```{r saturation-Backhaus}
-backhaus_traj = within(backhaus_traj,
-                       {
-                       saturation = sqrt(x^2+y^2) #distance from neutral hue
-                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
-                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
-                       }
-                       )
-pavo_traj = within(pavo_traj,
-                       {
-                       saturation = sqrt(x^2+y^2) #distance from neutral hue
-                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
-                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
-                       }
-                       )
+
 par(mfrow = c(1,2),
     mar = c(4,4,2,1))
-plt_expr =      expression({
-      plot(x = intensity,
-           y = saturation,
-           type = 'l',
-           log = 'x',
-           ylim = c(0,sqrt(12*2)),
-           col = 'orange',
-           lwd = 3)
-       abline(h = c(0,1)*sqrt(12*2))
-       plot(x = intensity,
-           y = greenness,
-           type = 'l',
-           log = 'x',
-           ylim = c(0,1),
-           ylab = 'colour axis strength',
-           col = 'green',
-           lwd = 3)       
-       lines(x = intensity,
-           y = uvness,
-           col = 'magenta',
-           lwd = 3)
-        abline(h = c(0,0.5,1))
-})
 
 
 with(subset(pavo_traj,
             wavelength <400),
-      eval(plt_expr)
+     {
+     plot(x = intensity,
+          y = chroma,
+          log = 'x',
+          type = 'l',
+          col = 'orange',
+          lwd = 3
+          )
+       abline(h = 0)
+     plot(x = intensity,
+          y = uv,
+          log = 'x',
+          type = 'l',
+          col = 'magenta',
+          lwd = 3,
+          ylab = "photoreceptor response (normalised)"
+          )
+     lines(x = intensity,
+           y = bl,
+           col = 'blue',
+           lwd = 3)
+     lines(x = intensity,
+           y = gr,
+           col = 'green',
+           lwd = 3)
+     abline(h = c(0,1))
+     }
 )
-mtext(text = 'Pavo COC')
-
-with(subset(backhaus_traj,
-            wavelength <400),
-     eval(plt_expr)
-)
-mtext(text = 'Backhaus COC')
 
 ```
 
-Here we can see the drop in UV saturation at high intensities for the Backhaus version, 
-but no perceptual shift towards green (greenness > 0.5). 
-For `pavo` hue remains stable and increases in saturation with intensity.
+Here we can see the drop in UV saturation at high intensities, 
+and increasing responses of the blue and green photoreceptors.
 
 
 ## Backhaus Model LEDs
