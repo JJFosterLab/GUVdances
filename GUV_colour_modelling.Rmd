@@ -46,18 +46,6 @@ editor_options:
 > The Bezold-Brücke effect in the color vision system of the honeybee.
 > *Vision Res.* 32(8):1425-31. doi: 10.1016/0042-6989(92)90199-s
 
-# TODO
-- photoreceptor saturation modelling + 
-- default COC colour vision model +
-- plot colour space COC model +
-- measure hue shift default COC model +
-- measure saturation shift default COC model +
-- photoreceptor saturation COC model
-- plot colour space phot.sat. COC model
-- measure hue shift phot.sat. COC model
-- measure saturation shift phot.sat. COC model
-- measure greenness phot.sat. COC model
-
 # Introduction
 
 In this analysis we simulate the detection of UV and green stimuli of different 
@@ -640,12 +628,12 @@ Plot_COC_equal = function(x = 0,
 ```
 
 
-### Simulate Bezold-Brücke Effect
+## Simulate Bezold-Brücke Effect
 
 In some experiments, honeybees interpreted coloured stimuli with the same reflectance 
 spectrum as different colours depending on their brightness, 
 although brightness differences did not play a role in stimulus discrimination. 
-In the colour opponent contrast (COC) model (Backhaus, 1991, 1992), these shifts in perceived colour,
+In the colour opponent contrast (COC) model (Backhaus, 1991), these shifts in perceived colour,
 known as the Bezold-Brücke effect in human colour vision (Purdy, 1931), 
 could be predicted from the non-linear responses of photoreceptors to increasing brightness. 
 
