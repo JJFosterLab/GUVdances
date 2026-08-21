@@ -63,7 +63,7 @@ editor_options:
 In this analysis we simulate the detection of UV and green stimuli of different 
 intensities by honeybee photoreceptors, and consequently their perceived spectral contrast 
 and colour. 
-Three distinct approaches are applied:
+Two distinct approaches are applied:
 
 1.
 Modelling of photoreceptor responses, based on their spectral sensitivity and 
@@ -72,8 +72,6 @@ intensity response curve.
 2.
 Default COC colour modelling using `pavo`.
 
-3.
-Adjusted COC colour modelling incorporating the photoreceptor response curves.
 
 # Set up work space
 
@@ -96,7 +94,7 @@ require("pavo")
 ## Photoreceptor Sensitivity
 
 We define a function, `StavengaSpline()`, to generate visual pigment template curves for invertebrates.
-It supports $A1$ pigment types and calculates the $\alpha$-, $\beta$-, and $\gamma$-absorption bands using modified lognormal models.
+It supports $A1$ pigment types and calculates the $\alpha$-, $\beta$-, and $\gamma$-absorption bands using modified log-normal models.
 
 ```{r stavenga_spline}
 # Make a spline template for a visual pigment
@@ -149,7 +147,7 @@ StavengaSpline = function(spec_range = c(300, 700), #bounds of spectrum in nanom
 We model the photoreceptor response (in mV) to light intensity (photons/cm²/s) using a Naka-Rushton-like function.
 The parameters are based on honeybee photoreceptor recordings from Kolyfetis *et al.* (2025).
 See `1Data/250327_009_Apis_MainRetina_Kolyfetis2025.pdf`.
-By default, we assume the semi-saturation points ($k_{50}$) is identical to that 
+By default, we assume the semi-saturation point ($k_{50}$) is identical to that 
 measured during those recordings. In a typical colour model, this is adjusted to 
 the background average.
 
@@ -466,11 +464,32 @@ mtext(side = 4,
 
 
 # Colour Opponent Contrast Model
+The colour opponent contrast model (Backhaus, 1991) estimates colour perception 
+in a two dimensional space, in which the two axes represent linear combinations 
+of the responses of the UV-, blue- and green-sensitive photoreceptors, 
+scaled such that the Manhattan distances between colour loci indicate the perceptual distance,
+and the point $(0,0)$ corresponds to neutral grey.
 
-## Sanity check 
-Reproduce the Bezold-Brücke effect reported in Backhaus 1991.
+The COC model simplifies the equation for photoreceptor responses from the Naka-Rushton 
+(Naka & Rushton, 1966; Hill, 1910) equation, $$ R(P) = \frac{R_{\max} P^n}{P^n + K_{50}^n}$$, 
+to a hyperbolic equation, $$R(P_{relative}) = \frac{P_{relative}}{P_{relative} + 1}$$,
+where $P_{relative}$ is the integrated photon catch of a photoreceptor divided by 
+the photon catch for the background, the slope $n = 1$ (Backhaus & Menzel, 1987) 
+is near constant around the inflection point at $50\%$ saturation, and the 
+$50\%$ saturation parameter $K_{50}$ adapts to the background intensity (Laughlin, 1989), 
+which is set to $P = 1$ for simplicity.
 
-### Set up functions
+Linear opponency between the responses of these photoreceptors is coded by just 
+two colour channels,
+$$A = -9.86 * R_\text{UV} + 7.70 * R_\text{blue} + 2.16 * R_\text{green}$$
+$$B = -5.17 * R_\text{UV} + 20.25 * R_\text{blue} - 15.08 * R_\text{green}$$,  
+the weightings having been derived experimentally (Backhaus *et al*., 1987).
+Perceived colour distances are the sum of differences in both $A$ & $B$ 
+(city-block or Manhattan distance).
+
+
+
+## Set up functions
 
 First set up a function that calculates the COC trajectories of monochromatic lights 
 across a given range of relative intensities (measured relative to the background).
@@ -481,35 +500,33 @@ work in precisely the same way.
 
 
 get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
-                                 intensity #relative intensities
+                                 intensity, #relative intensities
+                                 background = rep(x = 1.0/sum(pavo::sensdata(visual = "apis")$wl<650), #adds to 1.0 at bee-visible wavelengths
+                        times = length(pavo::sensdata(visual = "apis")$wl))
   ){
-  # 1. Establish the standard 300 to 700 nm wavelength backbone 
+  # Establish the standard 300 to 700 nm wavelength backbone 
   wl_backbone = pavo::sensdata(visual = "apis")$wl
   
-  # 2. Build the master pavo rspec framework matrix
+  # Build the master pavo rspec matrix
   pavo_matrix = data.frame(wl = wl_backbone)
   
     for (target_wl in test_wls) {
     for (i in 1:length(intensity)) {
-      col_name = paste0("WL_", target_wl, "_Mult_", i)
+      col_name = paste0("WL_", target_wl, "_Mult_", i) # name to easily retrieve wavelength
       pavo_matrix[[col_name]] = ifelse(wl_backbone == target_wl,
                                         yes =  intensity[i],
                                         no =  0)
     }
   }
-  pavo_rspec = as.rspec(pavo_matrix)
+  pavo_rspec = suppressMessages(as.rspec(pavo_matrix))
   
-  # 3. Define the homogeneous background vector
-  homogeneous_bkg = rep(x = 1.0/length(wl_backbone), #adds to 1.0
-                        times = length(wl_backbone))
-  
-  # 4. Run the native pavo vismodel pipeline
+  # Run the native pavo vismodel pipeline
   pavo_vis = vismodel(
     rspecdata  = pavo_rspec,
     visual     = "apis",
     qcatch     = "Ei",           
     illum      = "ideal",        
-    bkg        = homogeneous_bkg,
+    bkg        = background,
     vonkries   = TRUE,           # Active automatic normalization
     relative   = FALSE           
   )
@@ -518,19 +535,19 @@ get_pavo_trajectories = function(test_wls, #wavelengths of monochromatic light
   pavo_coc = colspace(vismodeldata = pavo_vis, 
                       space = "coc")
   
-  # 6. Build the matching metadata layout to map vectors back together
+  # Build the matching metadata layout to map vectors back together
   metadata = expand.grid(
     intensity_step = 1:length(intensity), 
     wavelength     = test_wls
   )
   
-  # 7. Package everything into a clean data frame matching the Backhaus layout exactly
+  # Package everything into a clean data frame matching the Backhaus layout exactly
   trajectory_data = data.frame(
     wavelength = as.character(metadata$wavelength),
     intensity  = intensity[metadata$intensity_step],
     x          = pavo_coc$x,
     y          = pavo_coc$y,
-    chroma = with(pavo_coc, sqrt(x^2 + y^2)), 
+    chroma = with(pavo_coc, abs(x) + abs(y)), #absolute Manhattan distance from neutral grey 
     uv = pavo_vis$s, #save the photoreceptor responses
     bl = pavo_vis$m,
     gr = pavo_vis$l
@@ -600,11 +617,41 @@ plot_coc_trajectories = function(trajectory_data, #data from get_backhaus_trajec
   
 }
 
+Plot_COC_equal = function(x = 0,
+                          y = 0,
+                          threshold = 1.83,
+                          ...)
+{
+  xx = c(x - threshold, # left corner
+         0, # top
+         x + threshold, #right corner
+         0, # bottom
+         x - threshold) #left corner
+  yy = c(0,
+         y + threshold,
+         0,
+         y - threshold,
+         0)
+  polygon(x = xx,
+          y = yy,
+          ...)
+}
 
 ```
 
 
-### Compare pavo and Backhaus versions
+### Simulate Bezold-Brücke Effect
+
+In some experiments, honeybees interpreted coloured stimuli with the same reflectance 
+spectrum as different colours depending on their brightness, 
+although brightness differences did not play a role in stimulus discrimination. 
+In the colour opponent contrast (COC) model (Backhaus, 1991, 1992), these shifts in perceived colour,
+known as the Bezold-Brücke effect in human colour vision (Purdy, 1931), 
+could be predicted from the non-linear responses of photoreceptors to increasing brightness. 
+
+This effect can be demonstrated well at 344 nm (UV $\lambda_\max$), 
+416 nm and 494 nm (equal UV-B and B-G sensitivity) 
+532 nm (high G sensitivity).
 
 ```{r pavo-Backhaus-simulation}
 
@@ -630,6 +677,8 @@ plot_coc_trajectories(trajectory_data = pavo_traj,
                       line_col = line_colours
                       )
 
+Plot_COC_equal(lty = 3)
+
 legend(x = 'topleft',
        legend = c(paste(test_wls, 'nm'),
                   '100x bkgd',
@@ -651,7 +700,7 @@ We can also plot the chroma saturation and relative photoreceptor responses for 
 ```{r saturation-Backhaus}
 
 par(mfrow = c(1,2),
-    mar = c(4,4,2,1))
+    mar = c(5,5,0,3))
 
 
 with(subset(pavo_traj,
@@ -662,36 +711,61 @@ with(subset(pavo_traj,
           log = 'x',
           type = 'l',
           col = 'orange',
-          lwd = 3
+          lwd = 5
           )
-       abline(h = 0)
+       abline(h = c(0, 1.83),
+              lty = c(1, 3))
      plot(x = intensity,
           y = uv,
           log = 'x',
           type = 'l',
           col = 'magenta',
-          lwd = 3,
+          lwd = 5,
+          ylim = c(0,1),
           ylab = "photoreceptor response (normalised)"
           )
      lines(x = intensity,
            y = bl,
            col = 'blue',
-           lwd = 3)
+           lwd = 5)
      lines(x = intensity,
            y = gr,
            col = 'green',
-           lwd = 3)
+           lwd = 5)
      abline(h = c(0,1))
-     }
+     #add ratio
+    #open new plot
+    par(new = TRUE)
+    plot(x = intensity,
+         y = x,
+         type = 'l',
+         ylim = c(-4, 0),
+         log = 'x',
+         lwd = 5,
+         col = 'purple4',
+         axes = FALSE,
+         xlab = '',
+         ylab = '')
+    
+    axis(side = 4,
+         col = 'purple4')
+    mtext(side = 4,
+          line = 2,
+          text = 'A (green + blue - UV)',
+          col = 'purple4')
+         }
 )
 
 ```
 
 Here we can see the drop in UV saturation at high intensities, 
 and increasing responses of the blue and green photoreceptors.
+In terms of perception as UV, this peaks ($\min(A)$) close to $100\times$ background 
+before returning towards perception as more long wavelength ($A\uparrow$) 
+due to the greater rate of increase in blue- and green-sensitive photoreceptor responses.
 
 
-## Backhaus Model LEDs
+## COC Model LEDs
 
 Assuming minimal reflections from the experimental room, the LEDs could plausibly be 
 3–5 log units brighter than the background. Assuming the bees are instead adapted 
@@ -700,29 +774,29 @@ to a bright afternoon sky, that range would be closer to -1.0 to 2.0 (see below)
 ```{r Backhaus-LEDs-dark-adapted}
 
 study_wls = c(led_u, led_g)
-study_multipliers = 10^seq(-2, 5, length.out = 100) # 0.01x to 100000x contrast sweep
+study_multipliers = 10^seq(-1,
+                           3,
+                           by = 0.1) # 0.01x to 100000x contrast sweep
 
   
-study_traj = get_backhaus_trajectories(test_wls = study_wls,
+study_traj = get_pavo_trajectories(test_wls = study_wls,
                                           intensity = study_multipliers
                                    )
 
-#add saturation and greenness
-study_traj = within(study_traj,
-                       {
-                       saturation = sqrt(x^2+y^2) #distance from neutral hue
-                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
-                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
-                       }
-                       )
 #when does chromatic saturation peak?
 print(
-  log10(
 with(subset(study_traj, wavelength < 400),
-     intensity[which(saturation == max(saturation))])
-),
+     intensity[which(chroma == max(chroma))]),
 digits = 2
 )
+
+#what is chromatic saturation at maximum intensity?
+print(
+with(subset(study_traj, wavelength < 400 & intensity %in% c(100,1000) ),
+    chroma),
+digits = 2
+)
+
 #plot together
 # Split plotting grid into two window rows
 par(mfrow = c(1, 1),
@@ -732,37 +806,31 @@ study_colours = c('magenta',
 names(study_colours) = study_wls
 
 plot_coc_trajectories(trajectory_data = study_traj,
-                      main_title = "Green and UV LEDs\nfrom dimmer to bright",
+                      main_title = "Green and UV LEDs\n(dark adapted)",
                       line_col = study_colours,
                       ref_point = 1e2
                       )
 
+Plot_COC_equal(lty = 3)
 
-legend(x = 'topright',
+legend(x = 'topleft',
        legend = c(paste(study_wls, 'nm'),
-                  '100x bkgd',
-                  paste0(round(max(study_multipliers)),'x bkgd') ),
+                  '100x background',
+                  paste0(round(max(study_multipliers)),'x background') ),
        col = c(study_colours,
                'black', 'gray75'),
        pch = c(rep(19,length(study_wls)),
                21, 21),
        bty = 'n')
 
-par(mfrow = c(1,2),
-    mar = c(4,4,2,1))
-with(subset(study_traj,
-            wavelength <400),
-     eval(plt_expr)
-)
-
 ```
 
-Here we do indeed observe a drop in UV saturation above $2.5 \cdot 10^2 \times$ background. 
+Here we do indeed observe a drop in UV saturation above $100 \times$ background. 
 At higher intensities, both the UV and green LEDs approach the "blue" quadrant 
-in the negative *A* and *B* directions as the responses of the other photoreceptors 
+in the positive *A* and *B* directions as the responses of the other photoreceptors 
 (blue and green for UV; blue and UV for green) grow more rapidly than the saturated 
-target receptor. Nonetheless, these trajectories curve back towards the $(0,0)$ 
-achromatic point before crossing the *A* or *B* axes, as all photoreceptors 
+target receptor. These trajectories curve back towards the $(0,0)$ 
+achromatic (neutral grey) point without crossing the *A* or *B* axes, as all photoreceptors 
 approach saturation. This occurs at lower intensities for the UV LED, which also 
 stimulates the $\beta$ peak of the other two receptors. 
 
@@ -772,33 +840,32 @@ radiance of around $10^14$ photons/cm²/s.
 ```{r Backhaus-LEDs-light-adapted}
 
 sky_spectrum = within(sensdata(illum = "bluesky"),
-                      {bluesky = bluesky*1e14}
+                      {bluesky = (bluesky/sum(bluesky))*1e14}
 )
 
-sky_spline = with(sky_spectrum, 
-                  smooth.spline(wl, bluesky) )
 
-led_sky_uv = predict(sky_spline, x = study_wls[1])$y # photon flux at wavelength of interest
-#N.B. this is similar for the green channel
-# 7.6e+13 vs 7.1e+13
+light_set = c(dimmer = 1.2e12, dim = 4e12, bright = 4e14)
 
-light_set = c(dimmer = 1.2e12, dim = 4e12, bright = 4e14)/led_sky_uv
-
-light_multipliers = 10^round(range(log10(light_set)))
-
+light_multipliers = c(seq(from = light_set[1],
+                          to = light_set[2],
+                          length.out = 50),
+                      seq(from = light_set[2],
+                          to = light_set[3],
+                          length.out = 50)
+                      )
   
-light_traj = get_backhaus_trajectories(test_wls = study_wls,
-                                          intensity = light_multipliers
+light_traj = get_pavo_trajectories(test_wls = study_wls,
+                                       intensity = light_multipliers,
+                                       background = sky_spectrum$bluesky
                                    )
 
-#add saturation and greenness
-light_traj = within(light_traj,
-                       {
-                       saturation = sqrt(x^2+y^2) #distance from neutral hue
-                       greenness = (1 + x/saturation)/2 #proportion maximum green in [0,1]
-                       uvness = (1 + y/saturation)/2 #proportion maximum UV in [0,1]
-                       }
-                       )
+
+#what is chromatic saturation at each intensity?
+print(
+with(subset(light_traj, wavelength < 400 & intensity %in% light_set ),
+    chroma),
+digits = 2
+)
 
 #plot together
 # Split plotting grid into two window rows
@@ -809,11 +876,12 @@ study_colours = c('magenta',
 names(study_colours) = study_wls
 
 plot_coc_trajectories(trajectory_data = light_traj,
-                      main_title = "Green and UV LEDs\nfrom dimmer to bright",
+                      main_title = "Green and UV LEDs\n(light adapted)",
                       line_col = study_colours,
                       ref_point = light_set[2]
                       )
 
+Plot_COC_equal(lty = 3)
 
 legend(x = 'topright',
        legend = c(paste(study_wls, 'nm'),
@@ -825,614 +893,9 @@ legend(x = 'topright',
                21, 21),
        bty = 'n')
 
-par(mfrow = c(1,2),
-    mar = c(4,4,0,1))
-with(subset(light_traj,
-            wavelength <400),
-     eval(plt_expr)
-)
-
 ```
 
-In the light adapted situation, no Bezold-Brücke effect occurs. Instead increases 
-in intensity result in increases in chromatic saturation paired with stable colour strength.
-
-# WIP!
-
-## Set up stimuli
-
-Here we construct our LED spectra as `rspec`` format spectra in µmol/m²/s, 
-by converting from cm$^2$ to m$^2$ and photons to moles, multiplying by $10^6$ to get µmol.
-For colour modelling, we need average photons per ommatidium, which requires multiplication 
-by an additional scaling factor.
-
-```{r setup-stimulus-spectrum}
-LED_rspec = data.frame(wl = seq(from = 300, to = 700, by = 1.0))
-
-stimulus_deg = 10.0   # Diameter of LED stimulus in degrees
-acceptance_deg  = 2.0  # Acceptance angle of a honeybee ommatidium (~1.5° - 2.5°)
-
-spatial_factor  =  (min(acceptance_deg, stimulus_deg) / stimulus_deg)^2 
-scale_factor  = spatial_factor
-
-micromol_stim = c(dimmer = 1.2e12, dim = 4e12, bright = 4e14) *
-                 1e4 *       # cm2 -> m2
-                 1e6 /       # mol -> micromol
-                 6.022e23    # Avogadro's number
-
-# Create uniform binary version
-LED_rspec_rect = within(LED_rspec, {
-  LEDu = ifelse(test = wl > min(led_u + wlband) & wl < max(led_u + wlband), yes = 1, no = 0)
-  LEDg = ifelse(test = wl > min(led_g + wlband) & wl < max(led_g + wlband), yes = 1, no = 0)
-})
-
-# Apply spatial scaling and adjust by bandwidth
-LED_rspec_rect = within(LED_rspec_rect, {
-  bandwidth = diff(range(wlband))
-  UVdimmer = (micromol_stim['dimmer'] * scale_factor) * LEDu / bandwidth
-  UVdim    = (micromol_stim['dim']    * scale_factor) * LEDu / bandwidth
-  UVbright = (micromol_stim['bright'] * scale_factor) * LEDu / bandwidth
-  Gdim     = (micromol_stim['dim']    * scale_factor) * LEDg / bandwidth
-  Gbright  = (micromol_stim['bright'] * scale_factor) * LEDg / bandwidth
-  rm('LEDu', 'LEDg', 'bandwidth')
-})
-
-# Convert to standard pavo rspec format
-LED_rspec_rect = as.rspec(LED_rspec_rect)
-
-# plot params
-vls = unlist(LED_rspec_rect[-1])
-mn = min(vls[vls > 0])
-
-plot(
-  x = NULL, 
-  xlim = c(300, 700), 
-  ylim = c(mn, max(vls)),
-  log = 'y',
-  xlab = 'Wavelength (nm)',
-  ylab = 'Intensity (µmol/m²/s)',
-  main = 'Simplified Stimuli Profiles - Rectangular Spectrum'
-)
-
-with(LED_rspec_rect, {
-  # Plot uniform blocks using step lines ("s")
-  lines(x = wl, y = UVbright + mn, type = 's', col = 'purple4', lwd = 2.5)
-  lines(x = wl, y = Gbright + mn, type = 's', col = 'forestgreen', lwd = 2.5)
-  lines(x = wl, y = UVdim + mn, type = 's', col = 'purple4', lty = 3, lwd = 2)
-  lines(x = wl, y = Gdim + mn, type = 's', col = 'forestgreen', lty = 3, lwd = 2)
-})
-
-```
-
-Although measured spectra are not available for these LEDs, they could be simulated as Cauchy PDF.
-
-```{r smooth-stimulus-spectrum}
-scale_factor = spatial_factor
-
-# Generate Cauchy profiles (typical LED emission)
-LED_rspec_smooth = within(LED_rspec, {
-  LEDu = dcauchy(x = wl, location = led_u, scale = diff(range(wlband))/2) # FWHM = 2γ
-  LEDg = dcauchy(x = wl, location = led_g, scale = diff(range(wlband))/2) # FWHM = 2γ
-})
-
-# Apply spatial scaling directly
-LED_rspec_smooth = within(LED_rspec_smooth, {
-  UVdimmer = (micromol_stim['dimmer'] * scale_factor) * LEDu
-  UVdim    = (micromol_stim['dim']    * scale_factor) * LEDu
-  UVbright = (micromol_stim['bright'] * scale_factor) * LEDu
-  Gdim     = (micromol_stim['dim']    * scale_factor) * LEDg
-  Gbright  = (micromol_stim['bright'] * scale_factor) * LEDg
-  rm('LEDu', 'LEDg')
-})
-
-# Convert to standard pavo rspec format
-LED_rspec_smooth = as.rspec(LED_rspec_smooth)
-
-# Plot smooth spectra
-vls = unlist(LED_rspec_smooth[-1])
-mn = min(vls[vls > 0])
-
-plot(
-  x = NULL, 
-  xlim = c(300, 700), 
-  ylim = c(mn, max(vls)),
-  log = 'y',
-  xlab = 'Wavelength (nm)',
-  ylab = 'Intensity (µmol/m²/s)',
-  main = 'Simplified Stimuli Profiles - Smooth Spectrum'
-)
-
-with(LED_rspec_smooth, {
-  # Bright Cauchy Profiles
-  polygon(x = c(wl, rev(wl)), y = c(UVbright, rep(mn, times = length(wl))),
-          col = adjustcolor('magenta', alpha.f = 0.1), border = 'magenta')
-  
-  polygon(x = c(wl, rev(wl)), y = c(Gbright, rep(mn, times = length(wl))),
-          col = adjustcolor('green3', alpha.f = 0.1), border = 'green3')
-
-  # Dim Cauchy Profiles
-  polygon(x = c(wl, rev(wl)), y = c(Gdim, rep(mn, times = length(wl))),
-          col = adjustcolor('darkgreen', alpha.f = 0.25), border = 'darkgreen')
-
-  polygon(x = c(wl, rev(wl)), y = c(UVdim, rep(mn, times = length(wl))),
-          col = adjustcolor('purple', alpha.f = 0.25), border = 'purple')
-})
-```
-
-
-
-### Simulate quantum catches
-To estimate perceived colours, we need to first compute photoreceptor responses, 
-as a function of quantum catch and background illumination, 
-Photoreceptor quantum catches and relative responses are calculated by `pavo::vismodel`, 
-then mapped into Colour-Opponent Coding colour space (`colspace`) for *Apis mellifera*.
-
-The COC colour space requires that responses scale relative to background adaptation, 
-achieved via von Kries scaling so that hyperbolic-transformed quantum catch ($(E_i = Q_i / (Q_i + 1))$) 
-for each stimulus is divided by that for each background. 
-*N.B.* This does not account for photoreceptor saturation.
-
-
-```{r simulate-catch}
-
-sky_spectrum = sensdata(illum = "bluesky")
-sky_spectrum = within(sky_spectrum,
-                     {
-                      bluesky_mol = 1e14*bluesky/#multiply by flux of a dim blue sky
-                        sum(bluesky)* #divide by integral
-                 1e4 *       # cm2 -> m2
-                 1e6 /       # mol -> micromol
-                 6.022e23    # Avogadro's number
-                     }
-                     )
-
-shade_spectrum = sensdata(illum = "forestshade")
-shade_spectrum = within(shade_spectrum,
-                     {
-                      forestshade_mol = 3e12*forestshade* #multiply by flux of a dim forest
-                 1e4 *       # cm2 -> m2
-                 1e6 /       # mol -> micromol
-                 6.022e23    # Avogadro's number
-                     }
-                     )
-
-#check that the spectra formats match
-nrow(LED_rspec_rect) == nrow(sky_spectrum)
-nrow(LED_rspec_rect) == nrow(shade_spectrum)
-
-qcatches_dark = vismodel(
-  rspecdata = LED_rspec_rect, # Wavelengths + emission intensities
-  visual = "apis",              # Honeybee trichromatic photoreceptors
-  qcatch = "Ei",           #Colour-opponent coding model requires hyperbolic photoreceptor responses
-  achromatic = "l",             # Use Green receptor for brightness contrast
-  illum = "ideal",              # These are emission spectra not reflectances
-  bkg = shade_spectrum[,'forestshade_mol'],           # The photoreceptors are adapted to shade
-  vonkries = TRUE,             # Ideally we would turn off adaptation; no background light exists
-  relative = FALSE               # Estimate absolute catches
-)
-
-qcatches_light = vismodel(
-  rspecdata = LED_rspec_rect, # Wavelengths + emission intensities
-  visual = "apis",              # Honeybee trichromatic photoreceptors
-  qcatch = "Ei",           #Colour-opponent coding model requires hyperbolic photoreceptor responses
-  achromatic = "l",             # Use Green receptor for brightness contrast
-  illum = "ideal",              # These are emission spectra not reflectances
-  bkg = sky_spectrum[,'bluesky_mol'],           # The photoreceptors are adapted to blue sky
-  vonkries = TRUE,             # Necessary for COC model
-  relative = FALSE               # Estimate absolute catches
-)
-
-# Project catches into the 2D space
-bee_space_dark = colspace(vismodeldata = qcatches_dark,
-                     space = "coc")#Backhaus Colour-opponent coding
-bee_space_light = colspace(vismodeldata = qcatches_light,
-                     space = 'coc')#Backhaus Colour-opponent coding
-```
-
-
-### Plot stimuli
-
-Counterintuitively the COC model in `pavo` finds only weak saturation for the dim stimuli,
-since the modelled quantum catchs are very low. 
-While this does produce a shift in saturation with intensity, the shift is to more saturated,
-the reverse of that shown by Backhaus (1992).
-```{r colour_space_stimuli}
-
-
-#plot colour space ----
-par(mfrow = c(1,2),
-    mar = c(0,1,0,1))
-#original scaled
-cocplot(
-  bee_space_dark, 
-  xlim = c(-1,1)*3,
-  ylim = c(-1,1)*3,
-  pch =  c(Gbright = 4,
-         Gdim = 3,
-         UVbright = 4,
-         UVdim = 3,
-         UVdimmer = 1),              
-  labels = TRUE,
-  col = c(Gbright = 'green3',
-         Gdim = 'darkgreen',
-         UVbright = 'magenta',
-         UVdim = 'purple',
-         UVdimmer = "magenta4"), 
-  bg = gray(1.0, alpha = 0.3),
-  lwd = 2,
-  cex = 1.8              # Size of the points
-)
-mtext(text = 'dark adapted (shade)',
-      at = c(2,2),
-      line = -2)
-
-#original scaled
-cocplot(
-  bee_space_light,
-  xlim = c(-1,1)*3,
-  ylim = c(-1,1)*3,
-  pch = c(Gbright = 4,
-         Gdim = 3,
-         UVbright = 4,
-         UVdim = 3,
-         UVdimmer = 1),               
-  labels = TRUE,
-  col = c(Gbright = 'green3',
-         Gdim = 'darkgreen',
-         UVbright = 'magenta',
-         UVdim = 'purple',
-         UVdimmer = "magenta4"), 
-  bg = gray(1.0, alpha = 0.3),
-  lwd = 2,
-  cex = 1.8              # Size of the points
-)
-mtext(text = 'light adapted (blue sky)',
-      at = c(2,2),
-      line = -2)
-
-legend(
-  "topleft", 
-  legend = c("bright green",  
-             "dim green",     
-             "bright UV",
-             "dim UV",
-             "dimmer UV"), 
-  col = c(Gbright = 'green3',
-         Gdim = 'darkgreen',
-         UVbright = 'magenta',
-         UVdim = 'purple',
-         UVdimmer = "magenta4"), 
-  pt.bg = gray(1.0, alpha = 0.5),
-  pch = c(Gbright = 4,
-         Gdim = 3,
-         UVbright = 4,
-         UVdim = 3,
-         UVdimmer = 1), 
-  pt.cex = 1.0,
-  cex = 1.2,
-  bty = "n"               # Removes the legend border box
-)
-
-```
-
-
-
-## Bezold-Brücke model
-
-
-Set up a function to calculate colour shifts that would result from photoreceptor saturation.
-
-```{r saturation-function}
-simulate_bezold_bruecke <- function(flux_range, sens_matrix, e_param, v_max) {
-  
-  # 1. Pre-allocate vectors for performance
-  n_steps       <- length(flux_range)
-  ds_shifts     <- numeric(n_steps)
-  ds_saturation <- numeric(n_steps)
-  greenness     <- numeric(n_steps)
-  bee_x_track   <- numeric(n_steps)
-  bee_y_track   <- numeric(n_steps)
-  
-  # 2. Establish the baseline chromatic signal at your lowest intensity step
-  phi_baseline   <- flux_range[1] * sens_matrix["UVdimmer", ]
-  mv_baseline    <- PRresponse(phi_baseline, vmax = v_max)
-  chrom_baseline <- mv_baseline - mean(mv_baseline)
-  
-  # 3. Cache repetitive noise denominator math outside the loop
-  den_param <- e_param[1]^2 * e_param[2]^2 +
-               e_param[2]^2 * e_param[3]^2 +
-               e_param[3]^2 * e_param[1]^2
-  
-  # 4. Single execution loop for all sensory metrics
-  for(i in 1:n_steps) {
-    # Generate raw millivolt receptor potentials [V_s, V_m, V_l]
-    phi_current <- flux_range[i] * sens_matrix["UVdimmer", ]
-    mv_current  <- PRresponse(phi_current, vmax = v_max)
-    
-    # Isolate pure chromatic signal by stripping mean luminance
-    mean_mv      <- mean(mv_current)
-    chrom_signal <- mv_current - mean_mv
-    
-    # Chromatic shift (difference between mean-subtracted current vs baseline)
-    delta_chrom  <- chrom_signal - chrom_baseline
-    
-    # Green receptor contribution ratio
-    greenness[i] <- mv_current["l"] / sum(mv_current)
-    
-    # --- RNL Distance Formulas ---
-    delta_num_param <- (delta_chrom[2] - delta_chrom[3])^2 * e_param[1]^2 +
-                       (delta_chrom[3] - delta_chrom[1])^2 * e_param[2]^2 +
-                       (delta_chrom[1] - delta_chrom[2])^2 * e_param[3]^2
-    
-    num_param <- (chrom_signal[2] - chrom_signal[3])^2 * e_param[1]^2 +
-                 (chrom_signal[3] - chrom_signal[1])^2 * e_param[2]^2 +
-                 (chrom_signal[1] - chrom_signal[2])^2 * e_param[3]^2
-                 
-    ds_shifts[i]     <- sqrt(delta_num_param / den_param)
-    ds_saturation[i] <- sqrt(num_param / den_param)
-    
-    # --- Backhaus COC Cartesian Matrix Projection ---
-    # Scaled safely by v_max to keep coordinates within standard -12 to 12 limits
-    # index 1 = s (UV), index 2 = m (Blue), index 3 = l (Green)
-    bee_x_track[i] <- 14 * (chrom_signal[3] - chrom_signal[2]) / v_max
-    bee_y_track[i] <- 11 * (chrom_signal[1] - (chrom_signal[2] + chrom_signal[3]) / 2) / v_max
-  }
-  
-  # 5. Compile outputs into a cohesive data frame
-  results_df <- data.frame(
-    flux          = flux_range,
-    ds_shift      = ds_shifts,
-    ds_saturation = ds_saturation,
-    greenness     = greenness,
-    coc_x         = bee_x_track,
-    coc_y         = bee_y_track
-  )
-  
-  return(results_df)
-}
-
-```
-
-In order to 
-• Purpose: simulate an intensity sweep (Bezold–Brücke) for a 365 nm LED: get receptor sensitivity matrix from vismodel, map photon flux → receptor mV (PRresponse), compute JND shift (manual RNL), and plot intensity-dependent hue shift.
-• Key inputs: LED_rspec (UVdimmer), PRresponse function, flux_range, sens_matrix, RNL noise params (n_ratios, weber).
-• Outputs: ds_shifts vector and log-x plot showing predicted chromatic shift vs intensity.
-• Checks: PRresponse must be defined and return consistent units; sens_matrix must have correct row name ("UVdimmer"); watch numeric stability for very large flux values and ensure weber/e_param choice is appropriate.
-
-```{r model-saturation}
-
-v_max = 50#mV
-
-# --- Use pavo to get the relative spectral overlap ratios ---
-stimulated_spectra = LED_rspec_rect[c('wl','UVdimmer')]
-stimulated_spectra = as.rspec(within(stimulated_spectra, {
-  UVdimmer = UVdimmer / #convert back to photon flux
-    (
-      1e4 *       # cm2 -> m2
-        1e6 /       # mol -> micromol
-        6.022e23    # Avogadro's number)]
-    )
-  #normalise
-  UVdimmer = UVdimmer/sum(UVdimmer)
-}))
-# Get clean, un-normalized sensitivity weights (relative = FALSE, scale = 1)
-# This extracts the exact proportion of light each receptor type captures per wavelength
-base_weights = vismodel(
-  rspecdata = stimulated_spectra,
-  visual = "apis",
-  achromatic = "l",
-  illum = "ideal",
-  bkg = 0,
-  vonkries = FALSE,
-  relative = FALSE,
-  scale = 1
-)
-
-# Extract just the UV (s), Blue (m), and Green (l) sensitivity matrix
-sens_matrix = as.matrix(base_weights[, c("s", "m", "l")])
-
-# Compute receptor noise
-# Standard neural noise factor for a single honeybee receptor channel (Vorobyev et al., 2001)
-w_noise = 0.05 
-
-# Relative receptor counts across the retina based on overall macro ratios:
-# UV (s) = ~11.4%, Blue (m) = ~5.4%, Green (l) = ~83.2%
-# Scaled relative to 1 single UV receptor unit:
-n_uv    = 1.0
-n_blue  = 0.47
-n_green = 7.30
-
-# Calculate RNL integrated channel noise thresholds
-e_uv    = w_noise / sqrt(n_uv)
-e_blue  = w_noise / sqrt(n_blue)
-e_green = w_noise / sqrt(n_green)
-
-# Combined into the ordered e_param vector matching loop indices: [1]=s, [2]=m, [3]=l
-e_param <- c(e_uv, e_blue, e_green)
-
-# --- Simulate the Bezold–Brücke intensity sweep ---
-# We will scale a single 365nm UV LED across your experimental range
-flux_range = 10^seq(from = 10,
-                    to = 15,
-                    length.out = 1e3) # photons/cm2/s
-    # ds_shifts = numeric(length(flux_range))
-    # ds_saturation = numeric(length(flux_range))
-    # greenness = numeric(length(flux_range))  # Relative L-channel contribution
-    # 
-    # # Calculate the millivolt baseline at your lowest intensity (10^10 photons)
-    # # Multiplying the flux by the sensitivity matrix distributes the photons across the channels
-    # # --- PART 4: Compute the JND color shift correctly ---
-    # 
-    # # 1. Baseline chromatic signal (isolated from overall luminance)
-    # phi_baseline = flux_range[1] * sens_matrix["UVdimmer", ]# * flux_to_ommatidium
-    # mv_baseline  = PRresponse(quanta = phi_baseline,
-    #                           vmax = v_max)
-    # chrom_baseline = (mv_baseline - mean(mv_baseline)) # Isolate pure baseline hue
-
-    # for(i in 1:length(flux_range)) {
-    #   phi_current = flux_range[i] * sens_matrix["UVdimmer", ] #* flux_to_ommatidium
-    #   mv_current  = PRresponse(phi_current) # [V_s, V_m, V_l]
-    #   
-    #   # 2. Isolate pure current hue by removing mean luminance
-    #   mean_mv = mean(mv_current)
-    #   chrom_signal = (mv_current - mean_mv)
-    #   
-    #   # 3. Chromatic shift is the difference between the 
-    #   # MEAN-SUBTRACTED signals (Current Hue vs Baseline Hue)
-    #   delta_chrom = chrom_signal - chrom_baseline
-    #   
-    #   # Ratio of L-voltage relative to overall voltage response across all channels
-    #   greenness[i]  =  mv_current["l"] / sum(mv_current)
-    #   
-    #   # 4. Manual RNL distance formula for pure HUE SHIFT (Bezold-Brücke)
-    #   delta_num_param <- (delta_chrom[2] - delta_chrom[3])^2 * e_param[1]^2 +
-    #                      (delta_chrom[3] - delta_chrom[1])^2 * e_param[2]^2 +
-    #                      (delta_chrom[1] - delta_chrom[2])^2 * e_param[3]^2
-    #   
-    #   # RNL Chromatic Saturation (Distance from origin/achromatic point)
-    #   num_param <- (chrom_signal[2] - chrom_signal[3])^2 * e_param[1]^2 +
-    #                (chrom_signal[3] - chrom_signal[1])^2 * e_param[2]^2 +
-    #                (chrom_signal[1] - chrom_signal[2])^2 * e_param[3]^2
-    #                
-    #   den_param <- e_param[1]^2 * e_param[2]^2 +
-    #                e_param[2]^2 * e_param[3]^2 +
-    #                e_param[3]^2 * e_param[1]^2
-    #                
-    #   ds_shifts[i]     <- sqrt(delta_num_param / den_param)
-    #   ds_saturation[i] <- sqrt(num_param / den_param)
-    # }
-
-sat_data <- simulate_bezold_bruecke(
-  flux_range  = flux_range,
-  sens_matrix = sens_matrix,
-  e_param     = e_param,
-  v_max       = v_max
-)
-
-par(mfrow = c(1,2))
-# --- Plot Intensity-dependent Hue Shift ---
-plot(
-  x = NULL,
-  log = 'x',
-  type = "l", 
-  xlab = "UV intensity (photons/cm2/s)",
-  ylab = "Chromatic Distance Shift (JND)",
-  main = "Predicted Bezold–Brücke Shift for 365nm LED",
-  ylim = c(0,1)*v_max,
-  xlim = range(flux_range)
-)
-abline(h = 0)
-polygon(y = c(0,1,1,0),
-        x = rev(sort(rep(range(flux_range)*c(0.1, 10),times = 2))),
-        col = gray(0.5, 0.2),
-        border = NA
-        )
-with(sat_data,
-     {
-lines(x = flux, 
-  y = ds_shift,
-    pch = 19,
-  col = "purple4",
-  lwd = 5
-  )
-     }
-)
-#add LEDs
-abline(v = c(1.2e12, 4e12, 4e14),
-       col = c('magenta4', 'purple', 'magenta'),
-       lwd = 2)
-# --- Plot Intensity-dependent Saturation Shift ---
-plot(
-  x = NULL,
-  log = 'x',
-  type = "l", 
-  xlab = "UV intensity (photons/cm2/s)",
-  ylab = "Distance to Achromatic Point (JND)",
-  main = "Predicted Bezold–Brücke Shift for 365nm LED",
-  ylim = c(0,1)*v_max,
-  xlim = range(flux_range)
-)
-abline(h = 0)
-polygon(y = c(0,1,1,0),
-        x = rev(sort(rep(range(flux_range)*c(0.1, 10),times = 2))),
-        col = gray(0.5, 0.2),
-        border = NA
-        )
-with(sat_data,
-     {
-lines(x = flux, 
-  y = ds_saturation,
-    pch = 19,
-  col = "purple4",
-  lwd = 5
-  )
-lines(x = flux, 
-  y = greenness*v_max,
-    pch = 19,
-  col = "green",
-  lwd = 5
-  )
-     }
-)
-axis(side = 4,
-     at = c(0,0.5,1.0)*v_max,
-     labels = c(0,0.5,1.0))
-#add LEDs
-abline(v = c(1.2e12, 4e12, 4e14),
-       col = c('magenta4', 'purple', 'magenta'),
-       lwd = 2)
-
-```
-### Hue analysis
-
-Plot the outcome in COC space
-```{r coc-saturation-plot}
-# Add coordinate arrays to tracking variables
-bee_x_track <- numeric(length(flux_range))
-bee_y_track <- numeric(length(flux_range))
-# --- Insert this inside your existing for-loop ---
-# Backhaus matrix transformation constants mapping to x and y coordinates
-# chrom_signal[1] = s (UV), chrom_signal[2] = m (Blue), chrom_signal[3] = l (Green)
-for(i in 1:length(flux_range)) {
-  phi_current = flux_range[i] * sens_matrix["UVdimmer", ] #* flux_to_ommatidium
-  mv_current  = PRresponse(phi_current) # [V_s, V_m, V_l]  
-  
-  mean_mv = mean(mv_current)
-  chrom_signal = mv_current - mean_mv
-  
-bee_x_track[i] = 7 * (chrom_signal[3] - chrom_signal[2])/v_max
-bee_y_track[i] = 11 * (chrom_signal[1] - (chrom_signal[2] + chrom_signal[3]) / 2)/v_max
-}
-# 1. Package the track into a compliant pavo colspace data frame
-coc_trajectory <- data.frame(
-  s = mv_current[1]/v_max, # Dummy placeholders to pass class verification
-  m = mv_current[2]/v_max,
-  l = mv_current[3]/v_max,
-  x = bee_x_track,   # Your intensity-driven x coordinates
-  y = bee_y_track    # Your intensity-driven y coordinates
-)
-class(coc_trajectory) <- c("colspace", "coc", "data.frame")
-
-# 2. Open a fresh plotting canvas
-# pavo::cocplot builds the traditional bee template
-pavo::cocplot(coc_trajectory, 
-              main = "Intensity-dependent Bezold-Brücke Trajectory",
-              col = "transparent") # Keeps points hidden initially to avoid clutter
-
-# 3. Draw the trajectory as a continuous curving vector path
-lines(x = bee_x_track, 
-      y = bee_y_track, 
-      col = "purple4", 
-      lwd = 4)
-
-# 4. Highlight specific key experimental intensity milestones on top of the line
-# Step 1 (10^10 photons)
-points(x = bee_x_track[1], y = bee_y_track[1], col = "black", pch = 19, cex = 2)
-text(x = bee_x_track[1], y = bee_y_track[1], labels = " Baseline (Dim)", pos = 3, cex = 0.8)
-
-# Final Step (10^15 photons)
-end_idx <- length(flux_range)
-points(x = bee_x_track[end_idx], y = bee_y_track[end_idx], col = "red", pch = 19, cex = 2)
-text(x = bee_x_track[end_idx], y = bee_y_track[end_idx], labels = " Saturated (Bright)", pos = 1, cex = 0.8)
-
-```
+In the light adapted situation, the Bezold-Brücke effect is more limited, 
+but still occurs for the brighter stimuli. The dim stimuli are dimmer than the background, 
+resulting in activation of only their target photoreceptor (UV $A<0$, green $B<0$) 
+but very little activation of the blue-sensitive photoreceptor ($A \& B >0$).
