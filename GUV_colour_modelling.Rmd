@@ -8,6 +8,10 @@ output:
     highlight: github
     toc: true
     fig_caption: true
+  # pdf_document:
+  #   highlight: rstudio
+  #   toc: true
+  #   fig_caption: true
 editor_options: 
   markdown: 
     wrap: sentence
@@ -637,7 +641,7 @@ In the colour opponent contrast (COC) model (Backhaus, 1991), these shifts in pe
 known as the Bezold-Brücke effect in human colour vision (Purdy, 1931), 
 could be predicted from the non-linear responses of photoreceptors to increasing brightness. 
 
-This effect can be demonstrated well at 344 nm (UV $\lambda_\max$), 
+This effect can be demonstrated well at 344 nm (UV $\lambda_{\max}$), 
 416 nm and 494 nm (equal UV-B and B-G sensitivity) 
 532 nm (high G sensitivity).
 
