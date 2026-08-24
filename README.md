@@ -1,5 +1,5 @@
 # High intensity overrides spectral cues in dancing honeybees
-This repository contains files relevant to the manuscript "_High intensity overrides spectral cues in dancing honeybees_"
+This repository contains files relevant to the manuscript "_High intensity alters spectral orientation in dancing honeybees_"
 by James J. Foster, 	Jacob M. Graving and Keram Pfeiffer.
 A project analysing the dances of honeybees
 presented with green and UV light spots of different brightnesses. 
