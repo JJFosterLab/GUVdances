@@ -8,6 +8,8 @@ output:
     highlight: github
     toc: true
     fig_caption: true
+  pdf_document:
+    latex_engine: xelatex
 editor_options: 
   markdown: 
     wrap: sentence
