@@ -33,7 +33,6 @@ editor_options:
 > `2Results/LRT_paired_diffs.csv`,
 > `2Results/BF_paired_diffs.csv`,
 
-
 > **REFERENCES**
 >
 > Edrich, W., Neumeyer, C.
@@ -47,7 +46,6 @@ editor_options:
 > (1984).
 > Celestial orientation in bees: the use of spectral cues.
 > *J. Comp. Physiol. A* 155, 605–613.
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -401,12 +399,10 @@ print(cn_mv_full_art)
 The post-hoc tests indicate a large difference between bright and dim conditions, as expected, but very little evidence for differences between colours.
 The interactions (for which there was low support in the overall model) reflect the pattern we expect, that all bright conditions have higher accuracy than all dim conditions, and that while the two dim conditions have similar accuracy, the bright UV bright condition may be slightly more accurate the bright green condition (p = 0.158).
 
-
 ### Parametric beta-distributed model of accuracy
 
 To investigate this with greater statistical power we would need an appropriate parametric model for bounded variables.
 One approach is to use the beta distribution, which is defined between (but not at) 0 and 1.
-
 
 #### Beta model for accuracy
 
@@ -2583,7 +2579,6 @@ We see here that while the confidence interval for the difference distribution b
 N.B.
 For *one-sided* calculations, the CI do overlap with 0° for green conditions, bright conditions and the leftmost mean for dim conditions.
 
-
 ### Plot difference CI
 
 ```{r Plot CI}
@@ -2948,10 +2943,7 @@ PltDance(ids = u_id,
          cx = 1.0)
 ```
 
-
-
 # Appendix
-
 
 ## Print raw data
 
@@ -2965,8 +2957,13 @@ print(ed)
 ```
 
 ## Session Information
+
 <details>
+
 <summary>Click to expand session metadata</summary>
 
 ```{r session-info, echo=FALSE}
 sessionInfo()
+```
+
+
