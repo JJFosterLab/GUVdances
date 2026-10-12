@@ -201,8 +201,12 @@ uPR_uLED = predict(StavengaSpline(lambda_max = lmax_u), x = led_u + wlband)
 # integrated sensitivity
 sens_gPR_uLED = integrate.xy(gPR_uLED)
 sens_gPR_gLED = integrate.xy(gPR_gLED)
+sens_uPR_uLED = integrate.xy(uPR_uLED)
+sens_uPR_gLED = integrate.xy(uPR_gLED)
 # spectral contrast (green-UV ratio)
 g_rel_u = sens_gPR_uLED / sens_gPR_gLED
+# relative sensitivity of green photoreceptor to UV LED
+print(sens_gPR_uLED/sens_uPR_uLED, digits = 3)
 ```
 
 ## Set Up Response Curve Data
