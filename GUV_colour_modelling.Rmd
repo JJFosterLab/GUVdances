@@ -369,6 +369,11 @@ plot(u_photopig,
 lines(g_photopig,
       lwd = 5,
       col = 'green')
+#blue photoreceptor, peak sensitivity from Menzel et al., 1986
+lines(predict(StavengaSpline(lambda_max = 440)),
+      lwd = 5,
+      lty = 2,
+      col = 'blue')
 
 with(uPR_uLED,
   polygon(x = c(x, rev(x)),
@@ -417,6 +422,15 @@ lines(x = xx,
       y = example_u,
       col = 'magenta',
       lwd = 5)
+#add blue photoreceptor, equal absolute sensitivity at its peak
+#relative UV sensitivity of blue photoreceptor (UV LED vs band around peak)
+b_rel_u = integrate.xy(predict(StavengaSpline(lambda_max = 440), x = led_u + wlband)) /
+          integrate.xy(predict(StavengaSpline(lambda_max = 440), x = 440 + wlband))
+lines(x = xx,
+      y = PRresponse(k50 = 3e12/b_rel_u, quanta = xx),
+      col = 'blue',
+      lwd = 5,
+      lty = 2)
 #add reference lines
 abline(h = c(0,0.5,1.0)*50,
        v = 10^c(11:15),
@@ -798,7 +812,7 @@ study_colours = c('magenta',
 names(study_colours) = study_wls
 
 plot_coc_trajectories(trajectory_data = study_traj,
-                      main_title = "Green and UV LEDs\n(dark adapted)",
+                      main_title = "Green and UV LEDs\n(room adapted)",
                       line_col = study_colours,
                       ref_point = 1e2
                       )
@@ -826,8 +840,11 @@ achromatic (neutral grey) point without crossing the *A* or *B* axes, as all pho
 approach saturation. This occurs at lower intensities for the UV LED, which also 
 stimulates the $\beta$ peak of the other two receptors. 
 
+
+## COC Model Sky-Adapted
+
 We could also assume light adaptation to a mid-afternoon blue sky with a total 
-radiance of around $10^14$ photons/cm²/s.
+radiance of around $10^{14}$ photons/cm²/s.
 
 ```{r Backhaus-LEDs-light-adapted}
 
@@ -868,7 +885,7 @@ study_colours = c('magenta',
 names(study_colours) = study_wls
 
 plot_coc_trajectories(trajectory_data = light_traj,
-                      main_title = "Green and UV LEDs\n(light adapted)",
+                      main_title = "Green and UV LEDs\n(sky adapted)",
                       line_col = study_colours,
                       ref_point = light_set[2]
                       )
